@@ -1,0 +1,53 @@
+name: Bug report
+description: Something the driver does wrong
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: manyfold-jdbc version
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: client
+    attributes:
+      label: Client or application
+      description: The SQL client or application that loads the driver, with its version.
+      placeholder: "SQuirreL SQL 5.1.0"
+    validations:
+      required: true
+  - type: textarea
+    id: url
+    attributes:
+      label: JDBC URL shape
+      description: The manyfold URL with hosts, users and passwords replaced by placeholders.
+      placeholder: "jdbc:manyfold:prod=jdbc:postgresql://HOST/db || dev=jdbc:postgresql://HOST/db"
+    validations:
+      required: true
+  - type: textarea
+    id: backends
+    attributes:
+      label: Backend drivers
+      description: Vendor driver name and version for every backend in the URL.
+      placeholder: "postgresql 42.7.x, postgresql 42.7.x"
+    validations:
+      required: true
+  - type: textarea
+    id: sql
+    attributes:
+      label: SQL statement
+      description: The smallest statement that shows the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: stack
+    attributes:
+      label: Stack trace or error text
+      render: text
