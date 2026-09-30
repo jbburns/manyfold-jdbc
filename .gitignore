@@ -6,6 +6,13 @@ target/
 *.class
 *.log
 
+# GUI validation harness output and downloads (validation/README.md). The generic out/ rule
+# above would also hide validation/out/.gitkeep, so re-include the folder and ignore its contents.
+!validation/out/
+validation/out/*
+!validation/out/.gitkeep
+validation/.cache/
+
 # IDE and OS
 .idea/
 *.iml

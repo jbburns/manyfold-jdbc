@@ -186,6 +186,12 @@ Releases are described in [RELEASING.md](RELEASING.md).
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and
 [CLAUDE.md](CLAUDE.md) for the design invariants.
 
+## GUI validation
+
+An on-demand script launches SQuirreL SQL with the driver and two H2 databases, runs the three
+statements from "Try it in five minutes" through the real GUI, and saves screenshots. It is not
+part of CI; see [validation/README.md](validation/README.md).
+
 ## Maintenance status
 
 Maintained on a best-effort basis with no response-time commitment. Issues and pull requests are
