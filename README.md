@@ -6,9 +6,27 @@ came from.
 
 ![SQuirreL SQL showing one SELECT returning rows from prod and dev with a source_database column](docs/images/squirrel-prod-dev.png)
 
-> **Status:** pre-release. The driver works and is tested against H2 and SQLite backends, but
-> nothing has been published to Maven Central yet. Until then, build the jar with
-> `./gradlew jar` and pick it up from `build/libs/`.
+## Getting the jar
+
+Download `manyfold-jdbc-<version>.jar` from the
+[latest release](https://github.com/jbburns/manyfold-jdbc/releases/latest) for use in a SQL
+client, or depend on it from Maven Central:
+
+```kotlin
+// Gradle
+implementation("io.github.jbburns:manyfold-jdbc:0.1.0")
+```
+
+```xml
+<!-- Maven -->
+<dependency>
+  <groupId>io.github.jbburns</groupId>
+  <artifactId>manyfold-jdbc</artifactId>
+  <version>0.1.0</version>
+</dependency>
+```
+
+The jar has no dependencies. Put the vendor JDBC drivers for your backends next to it.
 
 ## Why
 

@@ -86,16 +86,16 @@ because an expired key also fails every release at the signing step.
 4. **Approve the deployment.** Open the *Actions* tab, click the *Release* run, and press
    *Review deployments* then *Approve*. The job pauses here until you do, so nothing is signed
    or uploaded without a person pressing the button.
-5. **Publish in the Portal.** When the job finishes, open
-   <https://central.sonatype.com/publishing>, find the validated deployment, and press
-   *Publish*. Artifacts are on Maven Central within minutes and searchable within hours.
+5. **Wait for Central.** The job uploads, validates and releases the deployment in one go.
+   Artifacts are on Maven Central within minutes and searchable within hours at
+   <https://central.sonatype.com/artifact/io.github.jbburns/manyfold-jdbc>.
 6. **Check the GitHub Release** the job created under *Releases*. It carries the jar, its
    SHA-256, and the sources and javadoc jars. Edit the notes if you like.
 
-If step 4 or 5 fails, fix the cause on `main`, then tag the next patch version; a tag can be
-reused only if the deployment never reached the Portal. Once a release has gone through cleanly
-you can make step 5 automatic by changing the Gradle task in the workflow from
-`publishToMavenCentral` to `publishAndReleaseToMavenCentral`.
+If step 4 fails, fix the cause on `main` and tag the next patch version. A tag can be reused
+only if the deployment never reached the Portal. To inspect a deployment before it goes live,
+change the Gradle task in the workflow from `publishAndReleaseToMavenCentral` back to
+`publishToMavenCentral`; the job then stops after upload and you press *Publish* in the Portal.
 
 ## Limits to keep in mind
 

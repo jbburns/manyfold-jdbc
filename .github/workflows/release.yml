@@ -73,11 +73,12 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           ORG_GRADLE_PROJECT_org.gradle.java.installations.fromEnv: JAVA_HOME_17_X64,JAVA_HOME_21_X64
 
-      # Uploads a validated, signed deployment to the Central Portal. It waits there for a person
-      # to press "Publish". Switch the task to publishAndReleaseToMavenCentral once you trust it.
+      # Uploads a validated, signed deployment to the Central Portal and releases it. The only
+      # human gate is the environment approval above. To inspect a deployment before it goes
+      # live, change the task back to publishToMavenCentral and press "Publish" in the Portal.
       - name: Publish to Maven Central
         run: >-
-          ./gradlew publishToMavenCentral --no-daemon --no-configuration-cache
+          ./gradlew publishAndReleaseToMavenCentral --no-daemon --no-configuration-cache
           "-Pversion=${VERSION}"
         env:
           VERSION: ${{ steps.version.outputs.version }}
