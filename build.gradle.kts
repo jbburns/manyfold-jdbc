@@ -56,6 +56,8 @@ tasks.withType<JavaCompile>().configureEach {
     }
     if (name.contains("Test", ignoreCase = true)) {
         options.errorprone.disable("NullAway")
+        // Tests hold try-with-resources handles purely for their close() side effect.
+        options.compilerArgs.add("-Xlint:-try")
     }
 }
 
