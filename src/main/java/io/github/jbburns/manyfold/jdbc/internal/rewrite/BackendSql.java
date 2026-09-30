@@ -9,12 +9,15 @@ import org.jspecify.annotations.Nullable;
  *
  * @param original the statement exactly as the caller supplied it
  * @param sql the text to send to each backend, in URL order
+ * @param substituted per backend, whether a substitution actually changed the text (the directive
+ *     comments being stripped does not count)
  */
-public record BackendSql(String original, List<String> sql) {
+public record BackendSql(String original, List<String> sql, List<Boolean> substituted) {
 
-  /** Copies the list. */
+  /** Copies the lists. */
   public BackendSql {
     sql = List.copyOf(sql);
+    substituted = List.copyOf(substituted);
   }
 
   /**
@@ -28,20 +31,20 @@ public record BackendSql(String original, List<String> sql) {
   }
 
   /**
-   * What each backend was sent when it is not what the caller supplied, for error messages.
+   * What each backend was sent when a substitution changed it, for error messages.
    *
-   * @return one entry per backend, null where the text is unchanged, or null when no backend
-   *     received changed text
+   * @return one entry per backend, null where no substitution was applied, or null when no backend
+   *     had one
    */
   public @Nullable List<@Nullable String> sent() {
     List<@Nullable String> sent = new ArrayList<>(sql.size());
     boolean any = false;
-    for (String text : sql) {
-      if (text.equals(original)) {
-        sent.add(null);
-      } else {
-        sent.add(text);
+    for (int i = 0; i < sql.size(); i++) {
+      if (substituted.get(i)) {
+        sent.add(sql.get(i));
         any = true;
+      } else {
+        sent.add(null);
       }
     }
     return any ? sent : null;

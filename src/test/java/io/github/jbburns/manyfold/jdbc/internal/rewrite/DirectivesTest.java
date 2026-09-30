@@ -258,12 +258,16 @@ class DirectivesTest {
   }
 
   @Test
-  void sentIsNullWhenNothingChangedAndOtherwiseHoldsTheChangedTexts() throws Exception {
+  void sentIsNullWhenNoSubstitutionWasAppliedAndOtherwiseHoldsOnlyTheSubstitutedTexts()
+      throws Exception {
     assertThat(Directives.plan("select 1", NAMES).sent()).isNull();
+    // A directive that is only stripped, or that matches nothing, is not a substitution.
+    assertThat(Directives.plan("-- manyfold dev2: zz=yy\nselect * from a.t", NAMES).sent())
+        .isNull();
 
     List<String> sent = Directives.plan("-- manyfold dev2: a=b\nselect * from a.t", NAMES).sent();
 
-    assertThat(sent).containsExactly("select * from a.t", "select * from b.t");
+    assertThat(sent).containsExactly(null, "select * from b.t");
   }
 
   @Test

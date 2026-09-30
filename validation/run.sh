@@ -39,10 +39,16 @@
 #   - SQuirreL's own log says it connected to the alias at application start.
 #   - The session tab strip is drawn in the "connected" screenshot (skipped without ImageMagick).
 #   - After the two SELECTs, no window titled "Error*" exists and squirrel-sql.log has no ERROR.
+#     (The schema-directive steps come after that check and are not machine-checked; see below.)
 #   - Each screenshot exists, is not empty, and differs from the one before it.
 #   - SQuirreL is still running at the end.
 # The DELETE is expected to be refused by the driver. That outcome is reported but never fails
 # the run either way, because the refusal text is shown in the GUI, which is not machine-checked.
+# The same goes for the schema-directive steps at the end (README "Different schema per backend").
+# In h2 mode the last step runs the directive-less statement on purpose: backend 'dev' has no
+# schema ZONE1_PROD, so the GUI shows H2's 'Schema "ZONE1_PROD" not found'. SQuirreL prints the
+# deepest cause of an exception, so the driver's "Backend 'dev' failed:" prefix is not visible
+# there. The failure is the expected outcome and never fails the run.
 #
 # Exit status: 0 PASS, 1 FAIL (see RESULT.txt), 2 could not set up.
 
@@ -225,14 +231,20 @@ if [ "$MODE" = multi ]; then
 fi
 
 # ---- the exact URL from the README ------------------------------------------------------------
-# h2 mode uses the URL of "Try it in five minutes". multi mode uses the one in "One SQL, three
-# databases", with the two host names swapped in (the README shows localhost).
+# h2 mode uses the URL of "Try it in five minutes" (it already creates schemas ZONE1_PROD on prod
+# and ZONE1_DEV2 on dev for the schema-directive steps). multi mode uses the one in "One SQL,
+# three databases", with the two host names swapped in (the README shows localhost), and appends
+# an INIT statement pair that gives its H2 backend a schema ZONE1_DEV2 (the H2 backend is last in
+# the URL, so appending extends its INIT). The PostgreSQL schema zone1_prod and the MariaDB
+# database zone1_dev2 come from validation/db/*.sql.
 if [ "$MODE" = multi ]; then
   ALIAS_URL="$(grep -E '^jdbc:manyfold:postgres=jdbc:postgresql://localhost:5432/demo' "$REPO_ROOT/README.md" || true)"
   [ "$(printf '%s\n' "$ALIAS_URL" | wc -l)" -eq 1 ] && [ -n "$ALIAS_URL" ] \
     || die "expected exactly one 'jdbc:manyfold:postgres=jdbc:postgresql://localhost:5432/demo...' line in README.md"
   ALIAS_URL="${ALIAS_URL//\/\/localhost:5432\//\/\/$DB_HOST_POSTGRES:5432\/}"
   ALIAS_URL="${ALIAS_URL//\/\/localhost:3306\//\/\/$DB_HOST_MARIADB:3306\/}"
+  ALIAS_URL+='\;CREATE SCHEMA IF NOT EXISTS zone1_dev2'
+  ALIAS_URL+="\\;CREATE TABLE IF NOT EXISTS zone1_dev2.orders AS SELECT * FROM (VALUES (5, 'erin', 50.00)) AS t(id, customer, amount)"
 else
   ALIAS_URL="$(grep -E '^jdbc:manyfold:prod=jdbc:h2:mem:prod' "$REPO_ROOT/README.md" || true)"
   [ "$(printf '%s\n' "$ALIAS_URL" | wc -l)" -eq 1 ] && [ -n "$ALIAS_URL" ] \
@@ -260,11 +272,18 @@ WORK_DIR="$(mktemp -d)"
 USERDIR="$WORK_DIR/userdir"
 mkdir -p "$USERDIR"
 
+# SQuirreL strips "--" and "/* */" comments from a statement before it reaches the driver, by
+# default. Schema directives are comments, so both options are switched off (they are under
+# Session Properties > SQL); otherwise the driver never sees the directive.
 cat >"$USERDIR/prefs.xml" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <Beans>
     <Bean Class="net.sourceforge.squirrel_sql.client.preferences.SquirrelPreferences">
         <firstRun>false</firstRun>
+        <sessionProperties Class="net.sourceforge.squirrel_sql.client.session.properties.SessionProperties">
+            <removeLineComment>false</removeLineComment>
+            <removeMultiLineComment>false</removeMultiLineComment>
+        </sessionProperties>
     </Bean>
 </Beans>
 EOF
@@ -522,6 +541,31 @@ if [ "$MODE" = multi ]; then
   shot count-after-delete "SELECT count(*) again: still 1, 2 and 2, so the refused DELETE removed nothing"
 else
   shot count-after-delete "SELECT count(*) again: still 2 from prod and 1 from dev, so the refused DELETE removed nothing"
+fi
+
+# ---- schema directive (README "Different schema per backend") ----------------------------------
+# The statement is two lines. xdotool types the newline as Return, and SQuirreL runs the whole
+# statement at the cursor (statements end at a semicolon or a blank line), so both lines are one
+# statement and the comment reaches the driver as its leading comment.
+if [ "$MODE" = multi ]; then
+  type_and_run "$(printf '%s\n%s\n%s' \
+    '-- manyfold mariadb: zone1_prod=zone1_dev2' \
+    '-- manyfold h2: zone1_prod=zone1_dev2' \
+    'SELECT * FROM zone1_prod.orders ORDER BY id')"
+  widen_first_column
+  shot schema-directive "two directive comments then SELECT * FROM zone1_prod.orders ORDER BY id: postgres 20 as written, mariadb 10 and 11 from zone1_dev2, h2 5 from ZONE1_DEV2"
+else
+  type_and_run "$(printf '%s\n%s' \
+    '-- manyfold dev: zone1_prod=zone1_dev2' \
+    'SELECT * FROM zone1_prod.orders ORDER BY id')"
+  widen_first_column
+  shot schema-directive "-- manyfold dev: zone1_prod=zone1_dev2 then SELECT * FROM zone1_prod.orders ORDER BY id: prod 1 alice, prod 2 bob, dev 3 carol (dev read zone1_dev2), source_database first"
+
+  # Without the directive dev gets zone1_prod.orders as written and has no such schema: the GUI
+  # shows a failure naming backend 'dev'. Expected, so it is only recorded.
+  type_and_run "SELECT * FROM zone1_prod.orders ORDER BY id"
+  shot schema-directive-missing "same SELECT without the directive: the error pane shows H2's 'Schema \"ZONE1_PROD\" not found', raised by backend dev (SQuirreL shows only the deepest cause, so the 'Backend dev failed:' wrapper is not visible); this is why the directive is needed"
+  NOTES+=("schema-directive-missing: failure from backend 'dev' is expected (informational)")
 fi
 
 # ---- final checks -----------------------------------------------------------------------------

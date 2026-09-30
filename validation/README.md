@@ -23,4 +23,5 @@ Files here:
 | `Dockerfile` | Image with the harness and all downloads baked in. |
 | `docker-compose.yml` | MariaDB, PostgreSQL and the harness in multi mode. |
 | `db/*-init.sql` | Seed tables for the two servers. |
+| `db/mariadb-zone1-grants.sql` | Docker Compose only: grants the demo user on the `zone1_dev2` database. |
 | `db/start-local.sh` | Native, non-Docker start and seed of both servers. |

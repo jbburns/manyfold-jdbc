@@ -172,6 +172,17 @@ databases and runs `SELECT * FROM orders ORDER BY id`, `SELECT count(*) FROM ord
 `DELETE FROM orders`. The `DELETE` must be refused by the read-only guard. It needs no database
 server.
 
+It then runs the schema-directive demonstration from the README: the two-line statement
+`-- manyfold dev: zone1_prod=zone1_dev2` / `SELECT * FROM zone1_prod.orders ORDER BY id`
+(`07-schema-directive.png`, expect prod 1 and 2, dev 3), and the same `SELECT` without the comment
+(`08-schema-directive-missing.png`, expect H2's `Schema "ZONE1_PROD" not found` from backend
+`dev`, which is the point; it does not fail the run). SQuirreL prints only the deepest cause of an
+exception, so the driver's `Backend 'dev' failed:` prefix is not visible in that screenshot. The
+alias URL is the one in "Try it in five minutes", which also creates schema `ZONE1_PROD` on prod
+and `ZONE1_DEV2` on dev, so change the two together. The harness writes `prefs.xml` with SQuirreL's
+*Remove line comment* and *Remove multi line comment* options off, because by default SQuirreL
+strips a directive before the driver sees it.
+
 ### Mode multi: PostgreSQL, MariaDB and H2
 
 ```
@@ -260,6 +271,17 @@ PASS is a coarse check. It only catches gross failures: the alias did not connec
 window opened, a screenshot is missing or identical to the one before. Open the screenshots. In
 multi mode `multi-03-select-all.png` should show five rows with `source_database` in column 1:
 `postgres` (id 20), `mariadb` (10 and 11), `h2` (1 and 2), in URL order.
+
+In multi mode the last step, `multi-08-schema-directive.png`, runs
+`-- manyfold mariadb: zone1_prod=zone1_dev2` / `-- manyfold h2: zone1_prod=zone1_dev2` /
+`SELECT * FROM zone1_prod.orders ORDER BY id` and should show four rows: `postgres` 20 (schema
+`zone1_prod`), `mariadb` 10 and 11 (database `zone1_dev2`), `h2` 5 (schema `ZONE1_DEV2`). The
+seeding for it: `validation/db/postgres-init.sql` creates schema `zone1_prod`,
+`validation/db/mariadb-init.sql` creates database `zone1_dev2`, Docker Compose grants the demo
+user on it with `validation/db/mariadb-zone1-grants.sql` (init scripts run as root there),
+`validation/db/start-local.sh` grants it on its loopback-only accounts, and the harness appends
+the `ZONE1_DEV2` schema to the H2 `INIT` of the README URL. Re-run `start-local.sh` after pulling
+this change so an already seeded native server gets the new objects.
 
 ### How long it takes
 
