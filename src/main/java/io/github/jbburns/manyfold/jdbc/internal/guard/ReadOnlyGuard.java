@@ -195,12 +195,13 @@ public final class ReadOnlyGuard {
       int n = sql.length();
       while (pos < n && unsupported == null) {
         char c = sql.charAt(pos);
-        if (c > 126 || (c < 32 && c != ' ' && c != '\t' && c != '\r' && c != '\n')) {
-          // Dialects disagree on whether these are whitespace, part of a name or an error.
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
+          pos++;
+        } else if (c > 126 || c < 32) {
+          // Dialects disagree on whether these are whitespace, part of a name or an error. The four
+          // whitespace characters were handled above, so every control character left is refused.
           unsupported =
               "statement contains characters outside quotes that dialects read differently";
-        } else if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
-          pos++;
         } else if (c == '-' && peek(1) == '-' && endsComment(pos + 2)) {
           skipLine();
         } else if (c == '-' && peek(1) == '-' && lineOpensQuote(pos + 2)) {

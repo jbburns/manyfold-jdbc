@@ -211,8 +211,9 @@ class ResultSetHandlerTest {
     when(mocks.statementA.executeQuery("SELECT 1")).thenReturn(first);
     when(mocks.statementB.executeQuery("SELECT 1")).thenReturn(second);
 
-    try (Connection conn = mocks.open()) {
-      ResultSet rs = conn.createStatement().executeQuery("SELECT 1");
+    try (Connection conn = mocks.open();
+        Statement statement = conn.createStatement()) {
+      ResultSet rs = statement.executeQuery("SELECT 1");
 
       assertThatThrownBy(rs::close)
           .isInstanceOf(SQLException.class)

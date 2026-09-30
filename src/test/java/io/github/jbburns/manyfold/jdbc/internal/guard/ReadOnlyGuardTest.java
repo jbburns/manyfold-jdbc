@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.jbburns.manyfold.jdbc.ManyfoldException;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -299,5 +300,26 @@ class ReadOnlyGuardTest {
     // the DROP.
     assertThat(ReadOnlyGuard.refusalReason("SELECT 1 -- x\rDROP TABLE t")).isNotNull();
     assertThat(ReadOnlyGuard.refusalReason("SELECT 1 -- x\r\nFROM t")).isNull();
+  }
+
+  @Test
+  @Timeout(10)
+  void everyCharacterOutsideQuotesIsEitherWhitespaceOrRefusedWithoutLooping() {
+    for (char c = 0; c < 300; c++) {
+      String sql = "SELECT" + c + "1";
+      String reason = ReadOnlyGuard.refusalReason(sql);
+      if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
+        assertThat(reason).as("whitespace 0x%02x", (int) c).isNull();
+      } else if (c < 32 || c > 126) {
+        assertThat(reason)
+            .as("control or non-ASCII 0x%02x", (int) c)
+            .contains("characters outside quotes");
+      }
+    }
+    // Space is the boundary the control-character test sits next to: it is whitespace, DEL and
+    // the last control character below it are not.
+    assertThat(ReadOnlyGuard.refusalReason("SELECT 1")).isNull();
+    assertThat(ReadOnlyGuard.refusalReason("SELECT\u001f1")).isNotNull();
+    assertThat(ReadOnlyGuard.refusalReason("SELECT\u007f1")).isNotNull();
   }
 }

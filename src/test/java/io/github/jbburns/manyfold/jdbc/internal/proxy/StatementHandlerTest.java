@@ -433,13 +433,13 @@ class StatementHandlerTest {
     when(mocks.statementA.executeQuery("SELECT 1")).thenAnswer(blocking);
     when(mocks.statementB.executeQuery("SELECT 1")).thenAnswer(blocking);
     AtomicReference<Throwable> thrown = new AtomicReference<>();
-    try (Connection conn = mocks.open()) {
-      Statement s = conn.createStatement();
+    try (Connection conn = mocks.open();
+        Statement s = conn.createStatement()) {
       Thread caller =
           new Thread(
               () -> {
-                try {
-                  s.executeQuery("SELECT 1");
+                try (ResultSet ignored = s.executeQuery("SELECT 1")) {
+                  // The query is expected to fail; nothing to read.
                 } catch (Throwable t) {
                   thrown.set(t);
                 }
@@ -477,13 +477,13 @@ class StatementHandlerTest {
     when(mocks.statementB.executeQuery("SELECT 1")).thenAnswer(blocking);
     doThrow(new SQLException("cannot cancel")).when(mocks.statementA).cancel();
     AtomicReference<Throwable> thrown = new AtomicReference<>();
-    try (Connection conn = mocks.open()) {
-      Statement s = conn.createStatement();
+    try (Connection conn = mocks.open();
+        Statement s = conn.createStatement()) {
       Thread caller =
           new Thread(
               () -> {
-                try {
-                  s.executeQuery("SELECT 1");
+                try (ResultSet ignored = s.executeQuery("SELECT 1")) {
+                  // The query is expected to fail; nothing to read.
                 } catch (Throwable t) {
                   thrown.set(t);
                 }
@@ -569,10 +569,14 @@ class StatementHandlerTest {
       ArgumentCaptor<Reader> chars = ArgumentCaptor.forClass(Reader.class);
       verify(ps).setCharacterStream(eq(2), chars.capture(), eq(4));
       assertThat(chars.getValue()).isNotSameAs(reader);
-      assertThat(new BufferedReader(chars.getValue()).readLine()).isEqualTo("abcd");
+      try (BufferedReader lines = new BufferedReader(chars.getValue())) {
+        assertThat(lines.readLine()).isEqualTo("abcd");
+      }
       ArgumentCaptor<Reader> shorter = ArgumentCaptor.forClass(Reader.class);
       verify(ps).setCharacterStream(eq(3), shorter.capture(), eq(50L));
-      assertThat(new BufferedReader(shorter.getValue()).readLine()).isEqualTo("xy");
+      try (BufferedReader lines = new BufferedReader(shorter.getValue())) {
+        assertThat(lines.readLine()).isEqualTo("xy");
+      }
     }
     // Only the limited amount was consumed from the caller's stream and reader.
     assertThat(in.available()).isEqualTo(90);
