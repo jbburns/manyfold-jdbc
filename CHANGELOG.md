@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.1.0] - 2026-09-30
+
+First release.
+
 ### Added
 
 - `jdbc:manyfold:` driver that runs each statement against every backend named in the URL and
@@ -34,4 +40,5 @@ All notable changes to this project are documented here. The format follows
 - Streaming parameter setters buffer the stream once so every backend receives the full data.
 - Result sets returned by `DatabaseMetaData` no longer expose the vendor statement or connection.
 
-[Unreleased]: https://github.com/jbburns/manyfold-jdbc/commits/main
+[Unreleased]: https://github.com/jbburns/manyfold-jdbc/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/jbburns/manyfold-jdbc/releases/tag/v0.1.0
