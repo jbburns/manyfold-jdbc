@@ -14,7 +14,12 @@ commands. Read it before opening a pull request.
 ./gradlew spotlessApply              # fix formatting (google-java-format)
 ./gradlew test                       # tests on the build JDK only
 ./gradlew --write-verification-metadata sha256 build   # after any dependency version change
+./gradlew publishToMavenLocal -Pversion=0.0.1         # dry-run the publishable artifacts
 ```
+
+Releases: push a tag `vX.Y.Z` after adding a `## [X.Y.Z]` section to CHANGELOG.md. See
+RELEASING.md. Never put credentials anywhere in the repository; the release job reads them from
+GitHub environment secrets only.
 
 Requires JDK 21 to build. Bytecode targets Java 17. Gradle provisions a JDK 17 for `test17`.
 

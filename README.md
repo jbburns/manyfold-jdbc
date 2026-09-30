@@ -4,7 +4,9 @@ A pass-through JDBC driver that runs one SQL statement against several databases
 the rows as a single result set, with a `source_database` column telling you where each row
 came from.
 
-> **Status:** under construction. Nothing is published yet.
+> **Status:** pre-release. The driver works and is tested against H2 and SQLite backends, but
+> nothing has been published to Maven Central yet. Until then, build the jar with
+> `./gradlew jar` and pick it up from `build/libs/`.
 
 ## Why
 
@@ -49,12 +51,83 @@ SQL clients expose driver properties in their connection dialog.
 
 ## Setting up a SQL client
 
-The vendor jars must be in the **same driver definition** as the manyfold jar. Both DBeaver and
-SQuirreL SQL build one classloader per driver definition, and manyfold finds the vendor drivers
-through that classloader.
+The one rule: the vendor driver jars go in the **same driver definition** as the manyfold jar.
+Both SQuirreL SQL and DBeaver build one class loader per driver definition, and manyfold finds
+the vendor drivers through that class loader. A vendor driver registered elsewhere in the client
+is invisible to it.
 
-A step-by-step walkthrough for SQuirreL SQL and DBeaver will be added here once the first
-release is out.
+Driver class name, for any client that asks:
+
+```
+io.github.jbburns.manyfold.jdbc.ManyfoldDriver
+```
+
+### SQuirreL SQL
+
+1. Open the **Drivers** tab on the left and press **+** (*Create a new driver*).
+2. Name: `manyfold`. Example URL: `jdbc:manyfold:prod=jdbc:postgresql://HOST/db || dev=jdbc:postgresql://HOST/db`.
+3. On the **Extra Class Path** tab press **Add** and select the manyfold jar **and** every vendor
+   driver jar you will use behind it, for example the PostgreSQL driver jar.
+4. Press **List Drivers** and pick `io.github.jbburns.manyfold.jdbc.ManyfoldDriver` in the
+   *Class Name* box. Press **OK**.
+5. Open the **Aliases** tab, press **+**, choose the `manyfold` driver, paste your real URL, and
+   enter the user name and password that apply to every backend.
+6. For a backend that needs different credentials press **Properties**, open the **Driver
+   properties** tab, tick *Use driver properties*, and set `manyfold.<name>.user` and
+   `manyfold.<name>.password`. The names come from your URL.
+7. Connect. Run a query; the first column of every result is `source_database`.
+
+The object tree and autocomplete are populated from the first backend in the URL.
+
+### DBeaver
+
+1. **Database → Driver Manager → New**.
+2. Driver Name: `manyfold`. Class Name: `io.github.jbburns.manyfold.jdbc.ManyfoldDriver`.
+   URL Template: `jdbc:manyfold:prod=jdbc:postgresql://HOST/db || dev=jdbc:postgresql://HOST/db`.
+3. On the **Libraries** tab press **Add File** and add the manyfold jar **and** every vendor
+   driver jar. Press **Find Class** and confirm the manyfold driver class is selected. Press
+   **OK**.
+4. **Database → New Database Connection**, search for `manyfold`, and enter your real URL,
+   user name and password on the **Main** tab.
+5. Per-backend credentials go on the **Driver properties** tab as `manyfold.<name>.user` and
+   `manyfold.<name>.password`.
+6. Press **Test Connection**, then **Finish**.
+
+DBeaver identifies the SQL dialect from the first backend in the URL, so put the database you
+want dialect-aware editing for first.
+
+### Any other JDBC client or application
+
+Put the manyfold jar and the vendor jars on the same classpath and use the URL. The driver
+registers itself with `DriverManager`, so `DriverManager.getConnection(url, user, password)` works
+without a `Class.forName` call.
+
+## What the driver does and does not do
+
+- **Rows are concatenated, not interleaved.** All rows from the first backend, then all from the
+  second, and so on. An `ORDER BY` orders rows within each backend only.
+- **Every backend must return the same columns.** A different column count fails the query
+  with a message naming the backend. Column names and types are taken from the first backend.
+- **Results stream.** Nothing is buffered, so large results cost no more memory than they would
+  through the vendor driver. The merged result set is forward-only and read-only.
+- **Backends run concurrently.** A query that takes ten seconds on each of two backends takes
+  about ten seconds, not twenty.
+- **Failures are loud.** If any backend fails, the whole statement fails with one exception that
+  names the backend and carries the vendor exception, SQL state and error code. Partial results
+  are never returned.
+- **Read-only mode is a guard, not a parser.** It refuses a statement whose first keyword is not
+  a query keyword, or that contains a modifying keyword such as `INSERT`, `DELETE`, `INTO` or
+  `CALL` outside quotes and comments. This also refuses `SELECT ... FOR UPDATE`. It cannot see a
+  function with side effects called from a `SELECT`; for that, every backend connection is also
+  asked for a read-only transaction, which PostgreSQL and others enforce.
+- **Writes fan out with `readOnly=false`.** Update counts are summed across backends, batches
+  are summed element-wise, and `commit`, `rollback` and savepoints reach every backend. There is
+  no distributed transaction: a commit that succeeds on one backend and fails on another leaves
+  them different.
+- **Single-valued calls go to the first backend.** `DatabaseMetaData`, generated LOB objects,
+  warnings and similar come from the first backend in the URL.
+- **Credentials never leak.** URLs are redacted before they appear in names, messages, or
+  `DatabaseMetaData.getURL()`.
 
 ## Requirements
 
@@ -64,8 +137,11 @@ release is out.
 ## Building
 
 ```
-./gradlew build
+./gradlew build        # format check, static analysis, tests on Java 17 and 21, coverage
+./gradlew jar          # just the driver jar, in build/libs/
 ```
+
+Releases are described in [RELEASING.md](RELEASING.md).
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and
 [CLAUDE.md](CLAUDE.md) for the design invariants.
