@@ -1,5 +1,19 @@
 # manyfold-jdbc
 
+## The name
+
+A manifold is the part of an engine that joins several pipes into one. This driver does the
+same for databases: several connections go in, one result set comes out. "Manifold" itself was
+taken, since [Manifold Systems](https://github.com/manifold-systems/manifold) publishes a Java
+compiler plugin with a `manifold-sql` module on Maven Central, so the name became **manyfold**,
+which also says what it does: many databases, folded into one. At the time it was chosen there
+was no Java project, Maven artifact or npm package using the name. The only neighbour is
+[manyfold3d/manyfold](https://github.com/manyfold3d/manyfold), a Ruby application for organising
+3D-print files, which is an unrelated domain. The alternative "bunshin" was considered and
+passed over. The background is in [issue #1](https://github.com/jbburns/manyfold-jdbc/issues/1).
+
+## What it is
+
 A pass-through JDBC driver that runs one SQL statement against several databases and returns
 the rows as a single result set, with a `source_database` column telling you where each row
 came from.
