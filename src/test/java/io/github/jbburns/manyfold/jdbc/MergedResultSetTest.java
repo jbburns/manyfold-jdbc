@@ -102,7 +102,9 @@ class MergedResultSetTest {
       assertThat(rs.findColumn("customer")).isEqualTo(3);
       assertThat(rs.getObject(1, String.class)).isEqualTo("prod");
       assertThat(rs.getObject(2, Integer.class)).isEqualTo(1);
-      assertThat(new java.io.BufferedReader(rs.getCharacterStream(1)).readLine()).isEqualTo("prod");
+      try (java.io.BufferedReader reader = new java.io.BufferedReader(rs.getCharacterStream(1))) {
+        assertThat(reader.readLine()).isEqualTo("prod");
+      }
       assertThat(rs.getBytes(1)).asString().isEqualTo("prod");
     }
   }

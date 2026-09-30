@@ -105,7 +105,7 @@ final class ResultSetHandler extends BaseHandler {
   }
 
   @Override
-  protected @Nullable Object dispatch(Object proxy, Method method, Object[] args) throws Throwable {
+  protected @Nullable Object dispatch(Method method, Object[] args) throws Throwable {
     String name = method.getName();
     if (UNSUPPORTED.contains(name) || name.startsWith("update")) {
       throw new SQLFeatureNotSupportedException(

@@ -18,7 +18,7 @@ final class MetaDataResultSetHandler extends BaseHandler {
   }
 
   @Override
-  protected @Nullable Object dispatch(Object proxy, Method method, Object[] args) throws Throwable {
+  protected @Nullable Object dispatch(Method method, Object[] args) throws Throwable {
     if (method.getName().equals("getStatement")) {
       return null;
     }

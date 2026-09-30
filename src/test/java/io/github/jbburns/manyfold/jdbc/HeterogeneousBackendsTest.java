@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.ArrayList;
@@ -23,8 +24,11 @@ class HeterogeneousBackendsTest {
       try (Connection c = DriverManager.getConnection(url);
           Statement s = c.createStatement()) {
         s.execute("CREATE TABLE t (id INTEGER, name VARCHAR(20))");
-        s.execute(
-            "INSERT INTO t VALUES (1, '" + (url.equals(h2) ? "from h2" : "from sqlite") + "')");
+      }
+      try (Connection c = DriverManager.getConnection(url);
+          PreparedStatement insert = c.prepareStatement("INSERT INTO t VALUES (1, ?)")) {
+        insert.setString(1, url.equals(h2) ? "from h2" : "from sqlite");
+        insert.executeUpdate();
       }
     }
 

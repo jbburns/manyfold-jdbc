@@ -41,14 +41,13 @@ abstract class BaseHandler implements InvocationHandler {
         return ((Class<?>) arguments[0]).isInstance(proxy);
       }
       default -> {
-        return dispatch(proxy, method, arguments);
+        return dispatch(method, arguments);
       }
     }
   }
 
   /** Routes one interface method. Exceptions propagate to the caller unchanged. */
-  protected abstract @Nullable Object dispatch(Object proxy, Method method, Object[] args)
-      throws Throwable;
+  protected abstract @Nullable Object dispatch(Method method, Object[] args) throws Throwable;
 
   /** A short description for {@code toString()} and messages. */
   protected abstract String describe();

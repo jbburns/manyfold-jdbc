@@ -22,6 +22,14 @@ class ManyfoldExceptionTest {
 
   private static final int EXECUTE_FAILED = Statement.EXECUTE_FAILED;
 
+  private static final class VendorSyntaxError extends SQLSyntaxErrorException {
+    private static final long serialVersionUID = 1L;
+
+    VendorSyntaxError() {
+      super("vendor", "42S02", 42102);
+    }
+  }
+
   private static final List<SQLException> STANDARD_SUBTYPES =
       List.of(
           new SQLFeatureNotSupportedException("m", "0A000", 1),
@@ -52,13 +60,6 @@ class ManyfoldExceptionTest {
 
   @Test
   void aSubclassOfAStandardSubtypeIsReportedAsThatStandardSubtype() {
-    class VendorSyntaxError extends SQLSyntaxErrorException {
-      private static final long serialVersionUID = 1L;
-
-      VendorSyntaxError() {
-        super("vendor", "42S02", 42102);
-      }
-    }
     VendorSyntaxError vendor = new VendorSyntaxError();
 
     SQLException wrapped = ManyfoldException.backendFailed("prod", vendor);

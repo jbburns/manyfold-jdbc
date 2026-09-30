@@ -52,6 +52,10 @@ public final class Manyfold {
     if (!m.find()) {
       return 0;
     }
-    return Integer.parseInt(m.group(index + 1));
+    try {
+      return Integer.parseInt(m.group(index + 1));
+    } catch (NumberFormatException e) {
+      return 0; // a digit run too long for an int
+    }
   }
 }

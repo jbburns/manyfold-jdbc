@@ -14,6 +14,7 @@ import java.sql.SQLTransactionRollbackException;
 import java.sql.SQLTransientConnectionException;
 import java.util.Collections;
 import java.util.IdentityHashMap;
+import java.util.List;
 import java.util.Set;
 import org.jspecify.annotations.Nullable;
 
@@ -41,6 +42,40 @@ public class ManyfoldException extends SQLException {
 
   /** SQL state for a feature the merged result set does not support. */
   public static final String STATE_FEATURE_NOT_SUPPORTED = "0A000";
+
+  /** Builds a new exception of one standard subtype from the vendor's details. */
+  @FunctionalInterface
+  private interface Factory {
+    SQLException create(String message, @Nullable String state, int code, Throwable cause);
+  }
+
+  /** Pairs a standard {@code java.sql} exception class with the factory that rebuilds it. */
+  private record Rebuilder(Class<? extends SQLException> type, Factory factory) {}
+
+  /**
+   * The standard subtypes that {@link #backendFailed} preserves, in match order. None of these
+   * classes extends another one in the list, so the order does not affect the outcome.
+   */
+  private static final List<Rebuilder> REBUILDERS =
+      List.of(
+          new Rebuilder(
+              SQLFeatureNotSupportedException.class, SQLFeatureNotSupportedException::new),
+          new Rebuilder(SQLTimeoutException.class, SQLTimeoutException::new),
+          new Rebuilder(
+              SQLIntegrityConstraintViolationException.class,
+              SQLIntegrityConstraintViolationException::new),
+          new Rebuilder(SQLSyntaxErrorException.class, SQLSyntaxErrorException::new),
+          new Rebuilder(SQLDataException.class, SQLDataException::new),
+          new Rebuilder(
+              SQLTransientConnectionException.class, SQLTransientConnectionException::new),
+          new Rebuilder(
+              SQLNonTransientConnectionException.class, SQLNonTransientConnectionException::new),
+          new Rebuilder(
+              SQLInvalidAuthorizationSpecException.class,
+              SQLInvalidAuthorizationSpecException::new),
+          new Rebuilder(
+              SQLTransactionRollbackException.class, SQLTransactionRollbackException::new),
+          new Rebuilder(SQLRecoverableException.class, SQLRecoverableException::new));
 
   /**
    * Creates an exception.
@@ -84,30 +119,18 @@ public class ManyfoldException extends SQLException {
     }
     String state = vendor.getSQLState();
     int code = vendor.getErrorCode();
-    SQLException wrapped;
+    SQLException wrapped = null;
     if (vendor instanceof BatchUpdateException batch) {
       wrapped = new BatchUpdateException(message, state, code, batch.getLargeUpdateCounts(), cause);
-    } else if (vendor instanceof SQLFeatureNotSupportedException) {
-      wrapped = new SQLFeatureNotSupportedException(message, state, code, cause);
-    } else if (vendor instanceof SQLTimeoutException) {
-      wrapped = new SQLTimeoutException(message, state, code, cause);
-    } else if (vendor instanceof SQLIntegrityConstraintViolationException) {
-      wrapped = new SQLIntegrityConstraintViolationException(message, state, code, cause);
-    } else if (vendor instanceof SQLSyntaxErrorException) {
-      wrapped = new SQLSyntaxErrorException(message, state, code, cause);
-    } else if (vendor instanceof SQLDataException) {
-      wrapped = new SQLDataException(message, state, code, cause);
-    } else if (vendor instanceof SQLTransientConnectionException) {
-      wrapped = new SQLTransientConnectionException(message, state, code, cause);
-    } else if (vendor instanceof SQLNonTransientConnectionException) {
-      wrapped = new SQLNonTransientConnectionException(message, state, code, cause);
-    } else if (vendor instanceof SQLInvalidAuthorizationSpecException) {
-      wrapped = new SQLInvalidAuthorizationSpecException(message, state, code, cause);
-    } else if (vendor instanceof SQLTransactionRollbackException) {
-      wrapped = new SQLTransactionRollbackException(message, state, code, cause);
-    } else if (vendor instanceof SQLRecoverableException) {
-      wrapped = new SQLRecoverableException(message, state, code, cause);
     } else {
+      for (Rebuilder entry : REBUILDERS) {
+        if (entry.type().isInstance(vendor)) {
+          wrapped = entry.factory().create(message, state, code, cause);
+          break;
+        }
+      }
+    }
+    if (wrapped == null) {
       wrapped = new ManyfoldException(message, state, cause);
     }
     copyChain(vendor, wrapped);

@@ -69,7 +69,7 @@ final class StatementHandler extends BaseHandler {
   }
 
   @Override
-  protected @Nullable Object dispatch(Object proxy, Method method, Object[] args) throws Throwable {
+  protected @Nullable Object dispatch(Method method, Object[] args) throws Throwable {
     switch (method.getName()) {
       case "executeQuery" -> {
         guard(sqlArgument(method, args));

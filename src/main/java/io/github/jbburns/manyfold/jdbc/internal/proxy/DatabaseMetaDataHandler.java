@@ -22,7 +22,7 @@ final class DatabaseMetaDataHandler extends BaseHandler {
   }
 
   @Override
-  protected @Nullable Object dispatch(Object proxy, Method method, Object[] args) throws Throwable {
+  protected @Nullable Object dispatch(Method method, Object[] args) throws Throwable {
     return switch (method.getName()) {
       case "getConnection" -> connection.proxy();
       case "getURL" -> connection.redactedUrl();
