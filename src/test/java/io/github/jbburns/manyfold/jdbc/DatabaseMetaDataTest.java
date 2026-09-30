@@ -1,6 +1,7 @@
 package io.github.jbburns.manyfold.jdbc;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -10,6 +11,7 @@ import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -54,6 +56,36 @@ class DatabaseMetaDataTest {
         assertThat(conn.getMetaData().getURL())
             .isEqualTo("jdbc:manyfold:a=jdbc:spy://host/db?password=*** || b=jdbc:spy:x");
         assertThat(conn.toString()).doesNotContain("s3cret");
+      }
+    }
+  }
+
+  @Test
+  void metadataResultSetsDoNotLeakTheVendorStatementOrConnection() throws Exception {
+    try (H2Pair dbs = new H2Pair();
+        Connection conn = DriverManager.getConnection(dbs.manyfoldUrl())) {
+      DatabaseMetaData meta = conn.getMetaData();
+
+      try (ResultSet rs = meta.getTables(null, "PUBLIC", "ORDERS", new String[] {"BASE TABLE"})) {
+        assertThat(rs.getStatement()).isNull();
+        assertThat(rs.isWrapperFor(org.h2.jdbc.JdbcResultSet.class)).isFalse();
+        assertThat(rs.isWrapperFor(ResultSet.class)).isTrue();
+        assertThat(rs.unwrap(ResultSet.class)).isSameAs(rs);
+        assertThatThrownBy(() -> rs.unwrap(org.h2.jdbc.JdbcResultSet.class))
+            .isInstanceOf(SQLException.class);
+        assertThat(rs.next()).isTrue();
+        assertThat(rs.getString("TABLE_NAME")).isEqualTo("ORDERS");
+        assertThat(rs.getString(3)).isEqualTo("ORDERS");
+        assertThat(rs.getMetaData().getColumnName(1)).isEqualTo("TABLE_CAT");
+        assertThat(rs.next()).isFalse();
+      }
+      try (ResultSet rs = meta.getColumns(null, "PUBLIC", "ORDERS", "%")) {
+        assertThat(rs.getStatement()).isNull();
+        int columns = 0;
+        while (rs.next()) {
+          columns++;
+        }
+        assertThat(columns).isEqualTo(3);
       }
     }
   }

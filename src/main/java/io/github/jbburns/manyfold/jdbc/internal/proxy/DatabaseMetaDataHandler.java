@@ -3,11 +3,13 @@ package io.github.jbburns.manyfold.jdbc.internal.proxy;
 import io.github.jbburns.manyfold.jdbc.Manyfold;
 import java.lang.reflect.Method;
 import java.sql.DatabaseMetaData;
+import java.sql.ResultSet;
 import org.jspecify.annotations.Nullable;
 
 /**
  * The primary backend's {@link DatabaseMetaData}, except that the connection, URL and driver
- * identity describe the manyfold connection rather than the backend.
+ * identity describe the manyfold connection rather than the backend. Result sets are wrapped so
+ * that {@code getStatement()} does not expose the backend's statement or connection.
  */
 final class DatabaseMetaDataHandler extends BaseHandler {
 
@@ -28,7 +30,10 @@ final class DatabaseMetaDataHandler extends BaseHandler {
       case "getDriverVersion" -> Manyfold.version();
       case "getDriverMajorVersion" -> Manyfold.majorVersion();
       case "getDriverMinorVersion" -> Manyfold.minorVersion();
-      default -> call(method, primary, args);
+      default -> {
+        Object result = call(method, primary, args);
+        yield result instanceof ResultSet rs ? Proxies.metaDataResultSet(rs) : result;
+      }
     };
   }
 

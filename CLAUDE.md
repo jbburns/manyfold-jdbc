@@ -34,7 +34,8 @@ Requires JDK 21 to build. Bytecode targets Java 17. Gradle provisions a JDK 17 f
    on every backend connection. Any change to this path needs a test that proves a write is
    still refused.
 4. **Fail loudly.** If any backend fails, the whole operation fails with one exception that
-   names the logical source and wraps the vendor exception. Never return partial results.
+   names the logical source and wraps the vendor exception, keeping the vendor's `java.sql`
+   exception subtype, SQL state and vendor code. Never return partial results.
 5. **First backend is primary.** Anything that must return a single value, including
    `DatabaseMetaData`, comes from the first backend in the URL.
 6. **Never leak credentials.** Passwords must not appear in exception messages, logs,

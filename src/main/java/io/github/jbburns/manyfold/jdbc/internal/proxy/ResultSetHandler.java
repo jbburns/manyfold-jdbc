@@ -12,6 +12,7 @@ import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Statement;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import org.jspecify.annotations.Nullable;
 
@@ -133,11 +134,11 @@ final class ResultSetHandler extends BaseHandler {
         return statement;
       }
       case "findColumn" -> {
-        String label = (String) args[0];
+        String label = requireLabel((String) args[0]);
         if (label.equalsIgnoreCase(sourceColumn)) {
           return 1;
         }
-        return current().findColumn(label) + 1;
+        return (Integer) Objects.requireNonNull(callCurrent(method, args)) + 1;
       }
       case "getRow" -> {
         return Math.toIntExact(Math.min(row, Integer.MAX_VALUE));
@@ -181,8 +182,8 @@ final class ResultSetHandler extends BaseHandler {
           if (args[0] instanceof Integer column) {
             return getByIndex(method, args, column);
           }
-          if (args[0] instanceof String label) {
-            return getByLabel(method, args, label);
+          if (method.getParameterTypes()[0] == String.class) {
+            return getByLabel(method, args, requireLabel((String) args[0]));
           }
         }
         return call(method, current(), args);
@@ -196,7 +197,13 @@ final class ResultSetHandler extends BaseHandler {
     }
     started = true;
     while (current < cursors.size()) {
-      if (cursors.get(current).next()) {
+      boolean more;
+      try {
+        more = cursors.get(current).next();
+      } catch (SQLException | RuntimeException e) {
+        throw ManyfoldException.backendFailed(names.get(current), e);
+      }
+      if (more) {
         row++;
         return true;
       }
@@ -213,7 +220,7 @@ final class ResultSetHandler extends BaseHandler {
     lastReadWasSource = false;
     Object[] shifted = args.clone();
     shifted[0] = column - 1;
-    return call(method, current(), shifted);
+    return callCurrent(method, shifted);
   }
 
   private @Nullable Object getByLabel(Method method, Object[] args, String label) throws Throwable {
@@ -221,7 +228,23 @@ final class ResultSetHandler extends BaseHandler {
       return sourceValue(method, args);
     }
     lastReadWasSource = false;
-    return call(method, current(), args);
+    return callCurrent(method, args);
+  }
+
+  /** Calls the current cursor, naming the backend in whatever it throws. */
+  private @Nullable Object callCurrent(Method method, Object[] args) throws Throwable {
+    try {
+      return call(method, current(), args);
+    } catch (SQLException | RuntimeException e) {
+      throw ManyfoldException.backendFailed(names.get(Math.min(current, names.size() - 1)), e);
+    }
+  }
+
+  private static String requireLabel(@Nullable String label) throws SQLException {
+    if (label == null) {
+      throw new SQLException("The column label is null", "22023");
+    }
+    return label;
   }
 
   private Object sourceValue(Method method, Object[] args) throws SQLException {

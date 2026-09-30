@@ -4,19 +4,27 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import io.github.jbburns.manyfold.jdbc.ManyfoldException;
 import io.github.jbburns.manyfold.jdbc.support.H2Pair;
 import io.github.jbburns.manyfold.jdbc.support.MockedPair;
+import java.io.ByteArrayInputStream;
+import java.io.StringReader;
+import java.nio.charset.StandardCharsets;
+import java.sql.BatchUpdateException;
 import java.sql.CallableStatement;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -253,6 +261,146 @@ class StatementHandlerTest {
         Statement s = conn.createStatement()) {
       assertThat(s.executeLargeBatch())
           .containsExactly(3L, noInfo, failed, failed, failed, 12_000_000_000L);
+    }
+  }
+
+  @Test
+  void getUpdateCountIsMinusOneWhenAnyBackendReportsMinusOne() throws Exception {
+    when(mocks.statementA.getUpdateCount()).thenReturn(3);
+    when(mocks.statementB.getUpdateCount()).thenReturn(-1);
+    when(mocks.statementA.getLargeUpdateCount()).thenReturn(3L);
+    when(mocks.statementB.getLargeUpdateCount()).thenReturn(-1L);
+
+    try (Connection conn = mocks.open();
+        Statement s = conn.createStatement()) {
+      assertThat(s.getUpdateCount()).isEqualTo(-1);
+      assertThat(s.getLargeUpdateCount()).isEqualTo(-1L);
+    }
+  }
+
+  @Test
+  void anIntUpdateCountOverflowIsASqlExceptionNotAnArithmeticException() throws Exception {
+    when(mocks.statementA.executeUpdate("UPDATE t SET x = 1")).thenReturn(Integer.MAX_VALUE);
+    when(mocks.statementB.executeUpdate("UPDATE t SET x = 1")).thenReturn(1);
+    when(mocks.statementA.executeLargeUpdate("UPDATE t SET x = 1")).thenReturn(Long.MAX_VALUE);
+    when(mocks.statementB.executeLargeUpdate("UPDATE t SET x = 1")).thenReturn(1L);
+
+    try (Connection conn = mocks.open("readOnly=false");
+        Statement s = conn.createStatement()) {
+      assertThatThrownBy(() -> s.executeUpdate("UPDATE t SET x = 1"))
+          .isInstanceOf(SQLException.class)
+          .hasMessageContaining("add up to more than an int")
+          .hasCauseInstanceOf(ArithmeticException.class);
+      assertThatThrownBy(() -> s.executeLargeUpdate("UPDATE t SET x = 1"))
+          .isInstanceOf(SQLException.class)
+          .hasMessageContaining("add up to more than a long");
+    }
+  }
+
+  @Test
+  void aNullSqlStringIsRefusedInReadOnlyModeInsteadOfSkippingTheGuard() throws Exception {
+    try (Connection conn = mocks.open();
+        Statement s = conn.createStatement()) {
+      for (ThrowingCallable call :
+          new ThrowingCallable[] {
+            () -> s.executeQuery(null),
+            () -> s.execute(null),
+            () -> s.executeUpdate(null),
+            () -> s.addBatch(null)
+          }) {
+        assertThatThrownBy(call)
+            .isInstanceOf(ManyfoldException.class)
+            .hasMessageStartingWith("Refused in read-only mode: statement is null")
+            .satisfies(
+                e ->
+                    assertThat(((SQLException) e).getSQLState())
+                        .isEqualTo(ManyfoldException.STATE_READ_ONLY));
+      }
+      verifyNoInteractions(mocks.statementA, mocks.statementB);
+    }
+  }
+
+  @Test
+  void aBatchUpdateExceptionSurvivesWithItsCounts() throws Exception {
+    BatchUpdateException vendor =
+        new BatchUpdateException(
+            "row 2 failed", "23505", 7, new int[] {1, Statement.EXECUTE_FAILED});
+    when(mocks.statementB.executeBatch()).thenThrow(vendor);
+    when(mocks.statementA.executeBatch()).thenReturn(new int[] {1, 1});
+
+    try (Connection conn = mocks.open("readOnly=false");
+        Statement s = conn.createStatement()) {
+      s.addBatch("INSERT INTO t VALUES (1)");
+      s.addBatch("INSERT INTO t VALUES (1)");
+
+      assertThatThrownBy(s::executeBatch)
+          .isExactlyInstanceOf(BatchUpdateException.class)
+          .hasMessage("Backend 'b' failed: row 2 failed")
+          .hasCause(vendor)
+          .satisfies(
+              e -> {
+                BatchUpdateException batch = (BatchUpdateException) e;
+                assertThat(batch.getUpdateCounts()).containsExactly(1, Statement.EXECUTE_FAILED);
+                assertThat(batch.getSQLState()).isEqualTo("23505");
+                assertThat(batch.getErrorCode()).isEqualTo(7);
+              });
+    }
+  }
+
+  @Test
+  void streamingSettersGiveEveryBackendItsOwnCopyOfTheData() throws Exception {
+    try (Connection prod = dbs.prod();
+        Connection dev = dbs.dev()) {
+      for (Connection direct : new Connection[] {prod, dev}) {
+        try (Statement s = direct.createStatement()) {
+          s.execute("CREATE TABLE streams (id INT, txt CLOB, bin BLOB, ascii CLOB)");
+        }
+      }
+    }
+    String text = "h\u00e9llo w\u00f6rld " + "x".repeat(20_000);
+    byte[] bytes = new byte[50_000];
+    for (int i = 0; i < bytes.length; i++) {
+      bytes[i] = (byte) i;
+    }
+    try (Connection conn = h2Writable();
+        PreparedStatement ps = conn.prepareStatement("INSERT INTO streams VALUES (?, ?, ?, ?)")) {
+      ps.setInt(1, 1);
+      ps.setCharacterStream(2, new StringReader(text));
+      ps.setBinaryStream(3, new ByteArrayInputStream(bytes));
+      ps.setAsciiStream(4, new ByteArrayInputStream("ascii".getBytes(StandardCharsets.US_ASCII)));
+      assertThat(ps.executeUpdate()).isEqualTo(2);
+
+      ps.setInt(1, 2);
+      ps.setCharacterStream(2, new StringReader(text), 5);
+      ps.setBinaryStream(3, new ByteArrayInputStream(bytes), 10L);
+      ps.setNCharacterStream(4, new StringReader("nchars"));
+      assertThat(ps.executeUpdate()).isEqualTo(2);
+
+      ps.setInt(1, 3);
+      ps.setClob(2, new StringReader("clob"));
+      ps.setBlob(3, new ByteArrayInputStream(new byte[] {1, 2, 3}));
+      ps.setNClob(4, new StringReader("nclob"), 5L);
+      assertThat(ps.executeUpdate()).isEqualTo(2);
+    }
+
+    for (String url : new String[] {dbs.prodUrl, dbs.devUrl}) {
+      try (Connection direct = DriverManager.getConnection(url);
+          Statement s = direct.createStatement();
+          ResultSet rs = s.executeQuery("SELECT id, txt, bin, ascii FROM streams ORDER BY id")) {
+        assertThat(rs.next()).isTrue();
+        assertThat(rs.getString(2)).as(url).isEqualTo(text);
+        assertThat(rs.getBytes(3)).as(url).isEqualTo(bytes);
+        assertThat(rs.getString(4)).as(url).isEqualTo("ascii");
+        assertThat(rs.next()).isTrue();
+        assertThat(rs.getString(2)).as(url).isEqualTo(text.substring(0, 5));
+        assertThat(rs.getBytes(3)).as(url).isEqualTo(Arrays.copyOf(bytes, 10));
+        assertThat(rs.getString(4)).as(url).isEqualTo("nchars");
+        assertThat(rs.next()).isTrue();
+        assertThat(rs.getString(2)).as(url).isEqualTo("clob");
+        assertThat(rs.getBytes(3)).as(url).isEqualTo(new byte[] {1, 2, 3});
+        assertThat(rs.getString(4)).as(url).isEqualTo("nclob");
+        assertThat(rs.next()).isFalse();
+      }
     }
   }
 }

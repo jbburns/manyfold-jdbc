@@ -1,6 +1,20 @@
 package io.github.jbburns.manyfold.jdbc;
 
+import java.sql.BatchUpdateException;
+import java.sql.SQLDataException;
 import java.sql.SQLException;
+import java.sql.SQLFeatureNotSupportedException;
+import java.sql.SQLIntegrityConstraintViolationException;
+import java.sql.SQLInvalidAuthorizationSpecException;
+import java.sql.SQLNonTransientConnectionException;
+import java.sql.SQLRecoverableException;
+import java.sql.SQLSyntaxErrorException;
+import java.sql.SQLTimeoutException;
+import java.sql.SQLTransactionRollbackException;
+import java.sql.SQLTransientConnectionException;
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.Set;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -9,7 +23,8 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>When a backend fails, the message names the backend's logical source and the vendor exception
  * is attached as the cause. The SQL state and vendor code of that cause are copied so callers that
- * switch on them keep working.
+ * switch on them keep working, and standard {@code java.sql} exception subtypes are preserved; see
+ * {@link #backendFailed}.
  */
 public class ManyfoldException extends SQLException {
 
@@ -17,6 +32,9 @@ public class ManyfoldException extends SQLException {
 
   /** SQL state for a URL that cannot be parsed or a backend that cannot be reached. */
   public static final String STATE_CONNECTION_FAILURE = "08001";
+
+  /** SQL state for an operation on a connection that has been closed. */
+  public static final String STATE_CONNECTION_CLOSED = "08003";
 
   /** SQL state for a statement refused because the connection is read-only. */
   public static final String STATE_READ_ONLY = "25006";
@@ -48,13 +66,69 @@ public class ManyfoldException extends SQLException {
   /**
    * Wraps a failure from one backend so the message names the source.
    *
+   * <p>When the cause is one of the standard {@code java.sql} exception subclasses, the result is a
+   * new instance of the same subclass, so callers and connection pools that catch {@link
+   * java.sql.SQLFeatureNotSupportedException}, {@link java.sql.BatchUpdateException} and friends
+   * keep working. The SQL state, vendor code, cause and the vendor's own {@code getNextException}
+   * chain are carried over. Any other cause yields a {@link ManyfoldException}.
+   *
    * @param sourceName logical name of the backend
    * @param cause what the backend threw
    * @return the wrapped exception
    */
-  public static ManyfoldException backendFailed(String sourceName, Throwable cause) {
-    String state = cause instanceof SQLException e ? e.getSQLState() : null;
-    return new ManyfoldException(
-        "Backend '" + sourceName + "' failed: " + cause.getMessage(), state, cause);
+  public static SQLException backendFailed(String sourceName, Throwable cause) {
+    String detail = cause.getMessage() != null ? cause.getMessage() : cause.getClass().getName();
+    String message = "Backend '" + sourceName + "' failed: " + detail;
+    if (!(cause instanceof SQLException vendor)) {
+      return new ManyfoldException(message, null, cause);
+    }
+    String state = vendor.getSQLState();
+    int code = vendor.getErrorCode();
+    SQLException wrapped;
+    if (vendor instanceof BatchUpdateException batch) {
+      wrapped = new BatchUpdateException(message, state, code, batch.getLargeUpdateCounts(), cause);
+    } else if (vendor instanceof SQLFeatureNotSupportedException) {
+      wrapped = new SQLFeatureNotSupportedException(message, state, code, cause);
+    } else if (vendor instanceof SQLTimeoutException) {
+      wrapped = new SQLTimeoutException(message, state, code, cause);
+    } else if (vendor instanceof SQLIntegrityConstraintViolationException) {
+      wrapped = new SQLIntegrityConstraintViolationException(message, state, code, cause);
+    } else if (vendor instanceof SQLSyntaxErrorException) {
+      wrapped = new SQLSyntaxErrorException(message, state, code, cause);
+    } else if (vendor instanceof SQLDataException) {
+      wrapped = new SQLDataException(message, state, code, cause);
+    } else if (vendor instanceof SQLTransientConnectionException) {
+      wrapped = new SQLTransientConnectionException(message, state, code, cause);
+    } else if (vendor instanceof SQLNonTransientConnectionException) {
+      wrapped = new SQLNonTransientConnectionException(message, state, code, cause);
+    } else if (vendor instanceof SQLInvalidAuthorizationSpecException) {
+      wrapped = new SQLInvalidAuthorizationSpecException(message, state, code, cause);
+    } else if (vendor instanceof SQLTransactionRollbackException) {
+      wrapped = new SQLTransactionRollbackException(message, state, code, cause);
+    } else if (vendor instanceof SQLRecoverableException) {
+      wrapped = new SQLRecoverableException(message, state, code, cause);
+    } else {
+      wrapped = new ManyfoldException(message, state, cause);
+    }
+    copyChain(vendor, wrapped);
+    return wrapped;
+  }
+
+  /**
+   * Appends copies of the vendor's {@code getNextException} chain, so the vendor's own exceptions
+   * are never mutated when further failures are chained after the wrapper.
+   */
+  private static void copyChain(SQLException vendor, SQLException wrapped) {
+    Set<SQLException> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+    seen.add(vendor);
+    SQLException tail = wrapped;
+    for (SQLException next = vendor.getNextException();
+        next != null && seen.add(next);
+        next = next.getNextException()) {
+      SQLException copy =
+          new SQLException(next.getMessage(), next.getSQLState(), next.getErrorCode(), next);
+      tail.setNextException(copy);
+      tail = copy;
+    }
   }
 }

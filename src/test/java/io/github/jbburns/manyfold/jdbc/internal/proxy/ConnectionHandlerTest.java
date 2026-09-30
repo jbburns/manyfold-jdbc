@@ -13,10 +13,14 @@ import io.github.jbburns.manyfold.jdbc.support.MockedPair;
 import java.sql.Blob;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.sql.SQLFeatureNotSupportedException;
+import java.sql.SQLTimeoutException;
 import java.sql.Savepoint;
+import java.sql.Statement;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.Executor;
+import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -68,7 +72,7 @@ class ConnectionHandlerTest {
     when(mocks.b.createStatement()).thenThrow(vendor);
     try (Connection conn = mocks.open()) {
       assertThatThrownBy(conn::createStatement)
-          .isInstanceOf(ManyfoldException.class)
+          .isInstanceOf(SQLException.class)
           .hasMessageStartingWith("Backend 'b' failed:")
           .hasCause(vendor)
           .satisfies(e -> assertThat(((SQLException) e).getSQLState()).isEqualTo("53200"));
@@ -84,7 +88,7 @@ class ConnectionHandlerTest {
     when(mocks.b.createStatement()).thenThrow(new SQLException("no more cursors"));
     try (Connection conn = mocks.open()) {
       assertThatThrownBy(conn::createStatement)
-          .isInstanceOf(ManyfoldException.class)
+          .isInstanceOf(SQLException.class)
           .hasMessageStartingWith("Backend 'b' failed:")
           .satisfies(e -> assertThat(e.getCause().getSuppressed()).containsExactly(closeFailure));
     }
@@ -95,7 +99,7 @@ class ConnectionHandlerTest {
     when(mocks.a.createStatement()).thenThrow(new SQLException("primary down"));
     try (Connection conn = mocks.open()) {
       assertThatThrownBy(conn::createStatement)
-          .isInstanceOf(ManyfoldException.class)
+          .isInstanceOf(SQLException.class)
           .hasMessageStartingWith("Backend 'a' failed:");
 
       verify(mocks.b, never()).createStatement();
@@ -232,6 +236,89 @@ class ConnectionHandlerTest {
       assertThat(conn.createBlob()).isSameAs(blob);
 
       verify(mocks.b, never()).createBlob();
+    }
+  }
+
+  @Test
+  void aBackendSubtypeSurvivesSoPoolsCanCatchFeatureNotSupported() throws Exception {
+    Executor executor = Runnable::run;
+    SQLFeatureNotSupportedException vendor =
+        new SQLFeatureNotSupportedException("no network timeout", "0A000", 5);
+    doThrow(vendor).when(mocks.b).setNetworkTimeout(executor, 1000);
+    try (Connection conn = mocks.open()) {
+      assertThatThrownBy(() -> conn.setNetworkTimeout(executor, 1000))
+          .isExactlyInstanceOf(SQLFeatureNotSupportedException.class)
+          .hasMessage("Backend 'b' failed: no network timeout")
+          .hasCause(vendor)
+          .satisfies(
+              e -> {
+                assertThat(((SQLException) e).getSQLState()).isEqualTo("0A000");
+                assertThat(((SQLException) e).getErrorCode()).isEqualTo(5);
+              });
+    }
+  }
+
+  @Test
+  void createStatementKeepsTheBackendsExceptionSubtype() throws Exception {
+    when(mocks.b.createStatement()).thenThrow(new SQLTimeoutException("too slow", "HYT00"));
+    try (Connection conn = mocks.open()) {
+      assertThatThrownBy(conn::createStatement)
+          .isExactlyInstanceOf(SQLTimeoutException.class)
+          .hasMessage("Backend 'b' failed: too slow");
+    }
+  }
+
+  @Test
+  void abortMarksTheConnectionClosedAndStopsTheFanOut() throws Exception {
+    Executor executor = Runnable::run;
+    Connection conn = mocks.open();
+
+    conn.abort(executor);
+
+    assertThat(conn.isClosed()).isTrue();
+    assertThat(conn.isValid(1)).isFalse();
+    assertThatThrownBy(() -> conn.setAutoCommit(false))
+        .isInstanceOf(SQLException.class)
+        .satisfies(
+            e ->
+                assertThat(((SQLException) e).getSQLState())
+                    .isEqualTo(ManyfoldException.STATE_CONNECTION_CLOSED));
+    // Aborting again is harmless.
+    conn.abort(executor);
+    verify(mocks.a).abort(executor);
+  }
+
+  @Test
+  void statementsFailWithConnectionClosedAfterCloseButCloseStaysQuiet() throws Exception {
+    Connection conn = mocks.open();
+    Statement s = conn.createStatement();
+    conn.close();
+
+    assertThatThrownBy(() -> s.executeQuery("SELECT 1"))
+        .isInstanceOf(SQLException.class)
+        .satisfies(e -> assertThat(((SQLException) e).getSQLState()).isEqualTo("08003"));
+    s.close();
+    assertThat(conn.isValid(1)).isFalse();
+  }
+
+  @Test
+  void aNullSqlStringIsRefusedInReadOnlyModeAndForwardedOtherwise() throws Exception {
+    try (Connection conn = mocks.open()) {
+      for (ThrowingCallable call :
+          new ThrowingCallable[] {
+            () -> conn.prepareStatement(null),
+            () -> conn.prepareCall(null),
+            () -> conn.prepareStatement(null, Statement.RETURN_GENERATED_KEYS)
+          }) {
+        assertThatThrownBy(call)
+            .isInstanceOf(ManyfoldException.class)
+            .hasMessageStartingWith("Refused in read-only mode: statement is null")
+            .satisfies(
+                e ->
+                    assertThat(((SQLException) e).getSQLState())
+                        .isEqualTo(ManyfoldException.STATE_READ_ONLY));
+      }
+      verify(mocks.a, never()).prepareStatement(null);
     }
   }
 }

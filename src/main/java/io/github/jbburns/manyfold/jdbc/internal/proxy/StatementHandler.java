@@ -3,6 +3,12 @@ package io.github.jbburns.manyfold.jdbc.internal.proxy;
 import io.github.jbburns.manyfold.jdbc.ManyfoldException;
 import io.github.jbburns.manyfold.jdbc.internal.exec.FanOut;
 import io.github.jbburns.manyfold.jdbc.internal.guard.ReadOnlyGuard;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.Reader;
+import java.io.StringReader;
+import java.io.StringWriter;
 import java.lang.reflect.Method;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
@@ -19,7 +25,13 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>Executions run on every backend concurrently and their results are merged: result sets become
  * one merged result set, update counts are summed. Parameter setters and other void methods fan out
- * sequentially. Single-valued getters come from the first backend.
+ * sequentially. Single-valued getters come from the first backend. Streams and readers passed to
+ * the streaming parameter setters are read once and replayed to every backend.
+ *
+ * <p>Some things cannot be merged and come from the primary (first) backend only: {@code
+ * getWarnings}, the {@code ParameterMetaData} of a prepared statement, and the OUT parameters of a
+ * {@link java.sql.CallableStatement}. The other backends do run the call, but their OUT values are
+ * not readable through this object.
  */
 final class StatementHandler extends BaseHandler {
 
@@ -60,28 +72,28 @@ final class StatementHandler extends BaseHandler {
   protected @Nullable Object dispatch(Object proxy, Method method, Object[] args) throws Throwable {
     switch (method.getName()) {
       case "executeQuery" -> {
-        guard(sqlArgument(args));
+        guard(sqlArgument(method, args));
         List<ResultSet> results =
             fanOut.parallel(
                 statements, s -> (ResultSet) Objects.requireNonNull(call(method, s, args)));
         return merged(results);
       }
       case "execute" -> {
-        guard(sqlArgument(args));
+        guard(sqlArgument(method, args));
         List<Boolean> results =
             fanOut.parallel(
                 statements, s -> (Boolean) Objects.requireNonNull(call(method, s, args)));
         return agree(results, "execute");
       }
       case "executeUpdate", "executeLargeUpdate" -> {
-        refuseWrite(method.getName(), sqlArgument(args));
+        refuseWrite(method.getName(), sqlArgument(method, args));
         List<Number> counts =
             fanOut.parallel(
                 statements, s -> (Number) Objects.requireNonNull(call(method, s, args)));
         return sum(counts, method.getReturnType() == long.class);
       }
       case "addBatch" -> {
-        refuseWrite("addBatch", sqlArgument(args));
+        refuseWrite("addBatch", sqlArgument(method, args));
         fanOut.sequential(statements, s -> call(method, s, args));
         return null;
       }
@@ -129,10 +141,12 @@ final class StatementHandler extends BaseHandler {
         List<Number> counts =
             fanOut.sequential(
                 statements, s -> (Number) Objects.requireNonNull(call(method, s, args)));
-        if (counts.get(0).longValue() < 0) {
-          return method.getReturnType() == long.class
-              ? (Number) Long.valueOf(-1L)
-              : (Number) Integer.valueOf(-1);
+        for (Number count : counts) {
+          if (count.longValue() < 0) {
+            return method.getReturnType() == long.class
+                ? (Number) Long.valueOf(-1L)
+                : (Number) Integer.valueOf(-1);
+          }
         }
         return sum(counts, method.getReturnType() == long.class);
       }
@@ -154,8 +168,28 @@ final class StatementHandler extends BaseHandler {
       case "isClosed" -> {
         return connection.isClosed() || primary().isClosed();
       }
-      case "close", "cancel" -> {
+      case "close" -> {
+        if (connection.isClosed()) {
+          // The connection already closed its statements; closing again is a no-op.
+          closeQuietly();
+          return null;
+        }
         fanOut.sequential(statements, s -> call(method, s, args));
+        return null;
+      }
+      case "cancel" -> {
+        fanOut.sequential(statements, s -> call(method, s, args));
+        return null;
+      }
+      case "setBinaryStream",
+          "setAsciiStream",
+          "setUnicodeStream",
+          "setCharacterStream",
+          "setNCharacterStream",
+          "setBlob",
+          "setClob",
+          "setNClob" -> {
+        setStream(method, args);
         return null;
       }
       default -> {
@@ -168,8 +202,82 @@ final class StatementHandler extends BaseHandler {
     }
   }
 
-  private @Nullable String sqlArgument(Object[] args) {
-    return args.length > 0 && args[0] instanceof String sql ? sql : preparedSql;
+  /**
+   * Fans out a streaming parameter setter. A stream or reader can be consumed only once, so it is
+   * buffered and every backend receives its own fresh copy. Any length argument passes through.
+   */
+  private void setStream(Method method, Object[] args) throws Throwable {
+    int index = -1;
+    for (int i = 0; i < args.length; i++) {
+      if (args[i] instanceof InputStream || args[i] instanceof Reader) {
+        index = i;
+        break;
+      }
+    }
+    if (index < 0) {
+      fanOut.sequential(statements, s -> call(method, s, args));
+      return;
+    }
+    int streamIndex = index;
+    Object source = args[streamIndex];
+    byte[] bytes = null;
+    String text = null;
+    try {
+      if (source instanceof InputStream in) {
+        bytes = in.readAllBytes();
+      } else {
+        text = readAll((Reader) source);
+      }
+    } catch (IOException e) {
+      throw new ManyfoldException(
+          "Cannot read the stream passed to " + method.getName() + ": " + e.getMessage(),
+          "HY000",
+          e);
+    }
+    byte[] copyBytes = bytes;
+    String copyText = text;
+    fanOut.sequential(
+        statements,
+        s -> {
+          Object[] own = args.clone();
+          own[streamIndex] =
+              copyBytes != null
+                  ? new ByteArrayInputStream(copyBytes)
+                  : new StringReader(Objects.requireNonNull(copyText));
+          return call(method, s, own);
+        });
+  }
+
+  private static String readAll(Reader reader) throws IOException {
+    StringWriter out = new StringWriter();
+    char[] buffer = new char[8192];
+    for (int n = reader.read(buffer); n >= 0; n = reader.read(buffer)) {
+      out.write(buffer, 0, n);
+    }
+    return out.toString();
+  }
+
+  private void closeQuietly() {
+    for (Statement statement : statements) {
+      try {
+        statement.close();
+      } catch (SQLException | RuntimeException e) {
+        // The connection is already closed; there is nothing left to report.
+      }
+    }
+  }
+
+  private @Nullable String sqlArgument(Method method, Object[] args) throws ManyfoldException {
+    if (args.length > 0 && method.getParameterTypes()[0] == String.class) {
+      if (args[0] == null) {
+        if (readOnly()) {
+          throw ReadOnlyGuard.refusal("statement is null");
+        }
+        return null;
+      }
+      return (String) args[0];
+    }
+    return preparedSql;
   }
 
   private void guard(@Nullable String sql) throws ManyfoldException {
@@ -233,12 +341,21 @@ final class StatementHandler extends BaseHandler {
     return first;
   }
 
-  private static Object sum(List<Number> counts, boolean asLong) {
-    long total = 0;
-    for (Number count : counts) {
-      total += count.longValue();
+  private static Object sum(List<Number> counts, boolean asLong) throws ManyfoldException {
+    try {
+      long total = 0;
+      for (Number count : counts) {
+        total = Math.addExact(total, count.longValue());
+      }
+      return asLong ? (Object) total : (Object) Math.toIntExact(total);
+    } catch (ArithmeticException e) {
+      throw new ManyfoldException(
+          "The update counts of the backends add up to more than "
+              + (asLong ? "a long" : "an int; use the large variant of the method")
+              + " can hold",
+          "22003",
+          e);
     }
-    return asLong ? (Object) total : (Object) Math.toIntExact(total);
   }
 
   private int[] sumIntArrays(List<int[]> arrays) throws ManyfoldException {
@@ -281,18 +398,33 @@ final class StatementHandler extends BaseHandler {
   }
 
   /** Adds batch counts, keeping the JDBC sentinels SUCCESS_NO_INFO and EXECUTE_FAILED. */
-  private static int addBatchCount(int a, int b) {
+  private static int addBatchCount(int a, int b) throws ManyfoldException {
     if (a < 0 || b < 0) {
       return Math.min(a, b);
     }
-    return a + b;
+    try {
+      return Math.addExact(a, b);
+    } catch (ArithmeticException e) {
+      throw batchOverflow(e);
+    }
   }
 
-  private static long addBatchCount(long a, long b) {
+  private static long addBatchCount(long a, long b) throws ManyfoldException {
     if (a < 0 || b < 0) {
       return Math.min(a, b);
     }
-    return a + b;
+    try {
+      return Math.addExact(a, b);
+    } catch (ArithmeticException e) {
+      throw batchOverflow(e);
+    }
+  }
+
+  private static ManyfoldException batchOverflow(ArithmeticException e) {
+    return new ManyfoldException(
+        "The batch update counts of the backends add up to more than the count type can hold",
+        "22003",
+        e);
   }
 
   @Override

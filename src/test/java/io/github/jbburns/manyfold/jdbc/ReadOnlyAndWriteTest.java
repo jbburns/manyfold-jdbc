@@ -8,6 +8,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.sql.SQLIntegrityConstraintViolationException;
 import java.sql.Savepoint;
 import java.sql.Statement;
 import org.junit.jupiter.api.AfterEach;
@@ -191,7 +192,7 @@ class ReadOnlyAndWriteTest {
     try (Connection conn = DriverManager.getConnection(dbs.manyfoldUrl("readOnly=false"));
         Statement s = conn.createStatement()) {
       assertThatThrownBy(() -> s.executeUpdate("INSERT INTO orders VALUES (40, 'dup', 1)"))
-          .isInstanceOf(ManyfoldException.class)
+          .isInstanceOf(SQLIntegrityConstraintViolationException.class)
           .hasMessageStartingWith("Backend 'dev' failed:");
     }
   }

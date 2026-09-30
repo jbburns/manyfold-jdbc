@@ -1,5 +1,6 @@
 package io.github.jbburns.manyfold.jdbc.internal.proxy;
 
+import io.github.jbburns.manyfold.jdbc.ManyfoldException;
 import io.github.jbburns.manyfold.jdbc.internal.backend.Backend;
 import io.github.jbburns.manyfold.jdbc.internal.exec.FanOut;
 import io.github.jbburns.manyfold.jdbc.internal.guard.ReadOnlyGuard;
@@ -23,6 +24,11 @@ import org.jspecify.annotations.Nullable;
  * to every backend. Anything that returns a single value is answered by the first backend. In
  * read-only mode, attempts to turn the read-only flag off are ignored so the backends stay in the
  * state the connector put them in.
+ *
+ * <p>Objects that cannot be merged come from the primary (first) backend only: {@code createBlob},
+ * {@code createClob}, {@code createNClob}, {@code createSQLXML}, {@code createArrayOf} and {@code
+ * createStruct}, {@code getWarnings}, and the parameter metadata of prepared statements. Values
+ * created that way are not usable on the other backends.
  */
 final class ConnectionHandler extends BaseHandler {
 
@@ -84,13 +90,13 @@ final class ConnectionHandler extends BaseHandler {
   protected @Nullable Object dispatch(Object proxy, Method method, Object[] args) throws Throwable {
     switch (method.getName()) {
       case "createStatement" -> {
-        return createStatement(Statement.class, method, args, null);
+        return createStatement(Statement.class, method, args, false);
       }
       case "prepareStatement" -> {
-        return createStatement(PreparedStatement.class, method, args, (String) args[0]);
+        return createStatement(PreparedStatement.class, method, args, true);
       }
       case "prepareCall" -> {
-        return createStatement(CallableStatement.class, method, args, (String) args[0]);
+        return createStatement(CallableStatement.class, method, args, true);
       }
       case "getMetaData" -> {
         return Proxies.databaseMetaData(primary().getMetaData(), this);
@@ -102,7 +108,22 @@ final class ConnectionHandler extends BaseHandler {
       case "isClosed" -> {
         return closed || primary().isClosed();
       }
+      case "abort" -> {
+        if (closed) {
+          return null;
+        }
+        try {
+          fanOut.sequential(connections, c -> call(method, c, args));
+        } finally {
+          closed = true;
+          fanOut.close();
+        }
+        return null;
+      }
       case "isValid" -> {
+        if (closed) {
+          return false;
+        }
         for (Boolean valid :
             fanOut.sequential(
                 connections, c -> Objects.requireNonNull((Boolean) call(method, c, args)))) {
@@ -156,9 +177,13 @@ final class ConnectionHandler extends BaseHandler {
   }
 
   private Object createStatement(
-      Class<? extends Statement> type, Method method, Object[] args, @Nullable String sql)
+      Class<? extends Statement> type, Method method, Object[] args, boolean prepared)
       throws Throwable {
-    if (sql != null && options.readOnly()) {
+    String sql = prepared ? (String) args[0] : null;
+    if (options.readOnly() && prepared) {
+      if (sql == null) {
+        throw ReadOnlyGuard.refusal("statement is null");
+      }
       ReadOnlyGuard.check(sql);
     }
     List<Statement> statements = new ArrayList<>(connections.size());
@@ -175,8 +200,7 @@ final class ConnectionHandler extends BaseHandler {
         }
       }
       int failed = statements.size();
-      throw io.github.jbburns.manyfold.jdbc.ManyfoldException.backendFailed(
-          fanOut.names().get(failed), t);
+      throw ManyfoldException.backendFailed(fanOut.names().get(failed), t);
     }
     return Proxies.statement(type, statements, this, sql);
   }

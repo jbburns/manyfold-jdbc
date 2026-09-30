@@ -6,6 +6,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.github.jbburns.manyfold.jdbc.ManyfoldException;
 import java.sql.SQLException;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
@@ -54,7 +60,7 @@ class FanOutTest {
                       }
                       return i;
                     }))
-        .isInstanceOf(ManyfoldException.class)
+        .isInstanceOf(SQLException.class)
         .hasMessage("Backend 'a' failed: boom 1")
         .satisfies(
             e -> {
@@ -81,7 +87,7 @@ class FanOutTest {
                       }
                       return i;
                     }))
-        .isInstanceOf(ManyfoldException.class)
+        .isInstanceOf(SQLException.class)
         .hasMessage("Backend 'c' failed: runtime 3")
         .hasCauseInstanceOf(IllegalStateException.class);
   }
@@ -96,5 +102,100 @@ class FanOutTest {
                       throw new OutOfMemoryError("simulated");
                     }))
         .isInstanceOf(OutOfMemoryError.class);
+  }
+
+  @Test
+  void closeReleasesAThreadWaitingOnAQueuedTask() throws Exception {
+    FanOut shared = new FanOut(List.of("a", "b"));
+    CountDownLatch started = new CountDownLatch(2);
+    CountDownLatch never = new CountDownLatch(1);
+    ExecutorService callers = Executors.newFixedThreadPool(2);
+    try {
+      // The first caller occupies both pool threads.
+      Future<?> busy =
+          callers.submit(
+              () ->
+                  shared.parallel(
+                      List.of(1, 2),
+                      i -> {
+                        started.countDown();
+                        never.await();
+                        return i;
+                      }));
+      assertThat(started.await(5, TimeUnit.SECONDS)).isTrue();
+      // The second caller's tasks are queued behind them.
+      Future<?> queued = callers.submit(() -> shared.parallel(List.of(1, 2), i -> i));
+      Thread.sleep(300);
+
+      shared.close();
+
+      assertThatThrownBy(() -> queued.get(5, TimeUnit.SECONDS))
+          .isInstanceOf(ExecutionException.class)
+          .hasCauseInstanceOf(SQLException.class)
+          .satisfies(
+              e ->
+                  assertThat(((SQLException) e.getCause()).getSQLState())
+                      .isEqualTo(ManyfoldException.STATE_CONNECTION_CLOSED));
+      // The running tasks are interrupted, so the first caller also finishes.
+      assertThatThrownBy(() -> busy.get(5, TimeUnit.SECONDS))
+          .isInstanceOf(ExecutionException.class)
+          .hasCauseInstanceOf(SQLException.class);
+    } finally {
+      callers.shutdownNow();
+    }
+  }
+
+  @Test
+  void operationsAfterCloseFailWithConnectionClosedAndDoNotCreateThreads() {
+    FanOut closed = new FanOut(List.of("a", "b"));
+    closed.close();
+    long before = manyfoldThreads();
+
+    assertThatThrownBy(() -> closed.parallel(List.of(1, 2), i -> i))
+        .isInstanceOf(SQLException.class)
+        .hasMessage("Connection closed")
+        .satisfies(
+            e ->
+                assertThat(((SQLException) e).getSQLState())
+                    .isEqualTo(ManyfoldException.STATE_CONNECTION_CLOSED));
+    assertThatThrownBy(() -> closed.sequential(List.of(1, 2), i -> i))
+        .isInstanceOf(SQLException.class)
+        .satisfies(e -> assertThat(((SQLException) e).getSQLState()).isEqualTo("08003"));
+    assertThat(manyfoldThreads()).isLessThanOrEqualTo(before);
+  }
+
+  @Test
+  void aSingleBackendFanOutAlsoRefusesAfterClose() {
+    FanOut single = new FanOut(List.of("only"));
+    single.close();
+
+    assertThatThrownBy(() -> single.parallel(List.of(1), i -> i))
+        .isInstanceOf(SQLException.class)
+        .satisfies(e -> assertThat(((SQLException) e).getSQLState()).isEqualTo("08003"));
+  }
+
+  @Test
+  void poolThreadsAreNamedByPoolAndIndexAndAreDaemons() throws Exception {
+    FanOut named = new FanOut(List.of("a", "b"));
+    try {
+      List<String> names =
+          named.parallel(
+              List.of(1, 2),
+              i -> {
+                Thread t = Thread.currentThread();
+                return t.getName() + (t.isDaemon() ? "" : "!");
+              });
+
+      assertThat(names).allMatch(n -> n.matches("manyfold-\\d+-\\d+"));
+      assertThat(names).doesNotHaveDuplicates();
+    } finally {
+      named.close();
+    }
+  }
+
+  private static long manyfoldThreads() {
+    return Thread.getAllStackTraces().keySet().stream()
+        .filter(t -> t.getName().startsWith("manyfold-") && t.isAlive())
+        .count();
   }
 }

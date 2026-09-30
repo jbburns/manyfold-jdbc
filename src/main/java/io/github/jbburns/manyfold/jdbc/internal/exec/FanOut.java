@@ -4,11 +4,15 @@ import io.github.jbburns.manyfold.jdbc.ManyfoldException;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.jspecify.annotations.Nullable;
 
@@ -19,10 +23,15 @@ import org.jspecify.annotations.Nullable;
  * backend is thrown once every backend has been given its turn; further failures are chained
  * through {@link SQLException#setNextException}. Reads run concurrently on a small pool owned by
  * the connection; everything else runs sequentially in URL order.
+ *
+ * <p>After {@link #close} every operation fails with SQL state {@value
+ * ManyfoldException#STATE_CONNECTION_CLOSED}, including operations that were queued but had not
+ * started when the close happened.
  */
 public final class FanOut implements AutoCloseable {
 
   private static final AtomicInteger POOL_IDS = new AtomicInteger();
+  private static final long KEEP_ALIVE_SECONDS = 30;
 
   /** An operation on one backend's delegate that may return a value. */
   @FunctionalInterface
@@ -32,7 +41,9 @@ public final class FanOut implements AutoCloseable {
 
   private final List<String> names;
   private final int poolId = POOL_IDS.incrementAndGet();
-  private @Nullable ExecutorService executor;
+  private final AtomicInteger threadIndex = new AtomicInteger();
+  private @Nullable ThreadPoolExecutor executor;
+  private boolean closed;
 
   /**
    * Creates a fan-out over backends with the given logical names.
@@ -64,20 +75,25 @@ public final class FanOut implements AutoCloseable {
     if (delegates.size() == 1) {
       return sequential(delegates, call);
     }
-    ExecutorService pool = executor();
+    ThreadPoolExecutor pool = executor();
     List<Future<T>> futures = new ArrayList<>(delegates.size());
-    for (D delegate : delegates) {
-      futures.add(
-          pool.submit(
-              () -> {
-                try {
-                  return call.apply(delegate);
-                } catch (Exception e) {
-                  throw e;
-                } catch (Throwable t) {
-                  throw new WrappedError(t);
-                }
-              }));
+    try {
+      for (D delegate : delegates) {
+        futures.add(
+            pool.submit(
+                () -> {
+                  try {
+                    return call.apply(delegate);
+                  } catch (Exception e) {
+                    throw e;
+                  } catch (Throwable t) {
+                    throw new WrappedError(t);
+                  }
+                }));
+      }
+    } catch (RejectedExecutionException e) {
+      cancelAll(futures);
+      throw closedException();
     }
     List<T> results = new ArrayList<>(delegates.size());
     List<@Nullable Throwable> failures = new ArrayList<>();
@@ -89,11 +105,12 @@ public final class FanOut implements AutoCloseable {
         results.add(null);
         Throwable cause = e.getCause();
         failures.add(cause instanceof WrappedError w ? w.getCause() : cause);
+      } catch (CancellationException e) {
+        cancelAll(futures);
+        throw closedException();
       } catch (InterruptedException e) {
         Thread.currentThread().interrupt();
-        for (Future<T> f : futures) {
-          f.cancel(true);
-        }
+        cancelAll(futures);
         throw new ManyfoldException(
             "Interrupted while waiting for backend '" + names.get(i) + "'", "HY008", e);
       }
@@ -114,6 +131,7 @@ public final class FanOut implements AutoCloseable {
    */
   public <D, T extends @Nullable Object> List<T> sequential(List<D> delegates, Call<D, T> call)
       throws SQLException {
+    ensureOpen();
     List<T> results = new ArrayList<>(delegates.size());
     List<@Nullable Throwable> failures = new ArrayList<>(delegates.size());
     for (D delegate : delegates) {
@@ -130,8 +148,8 @@ public final class FanOut implements AutoCloseable {
   }
 
   private void throwIfAnyFailed(List<@Nullable Throwable> failures) throws SQLException {
-    ManyfoldException first = null;
-    ManyfoldException last = null;
+    SQLException first = null;
+    SQLException last = null;
     for (int i = 0; i < failures.size(); i++) {
       Throwable failure = failures.get(i);
       if (failure == null) {
@@ -140,11 +158,11 @@ public final class FanOut implements AutoCloseable {
       if (failure instanceof Error error) {
         throw error;
       }
-      ManyfoldException wrapped = ManyfoldException.backendFailed(names.get(i), failure);
+      SQLException wrapped = ManyfoldException.backendFailed(names.get(i), failure);
       if (first == null) {
         first = wrapped;
       } else {
-        java.util.Objects.requireNonNull(last).setNextException(wrapped);
+        Objects.requireNonNull(last).setNextException(wrapped);
       }
       last = wrapped;
     }
@@ -162,27 +180,69 @@ public final class FanOut implements AutoCloseable {
     }
   }
 
-  private synchronized ExecutorService executor() {
-    ExecutorService pool = executor;
+  private static <T> void cancelAll(List<Future<T>> futures) {
+    for (Future<T> future : futures) {
+      future.cancel(true);
+    }
+  }
+
+  private static SQLException closedException() {
+    return new ManyfoldException("Connection closed", ManyfoldException.STATE_CONNECTION_CLOSED);
+  }
+
+  private synchronized void ensureOpen() throws SQLException {
+    if (closed) {
+      throw closedException();
+    }
+  }
+
+  private synchronized ThreadPoolExecutor executor() throws SQLException {
+    if (closed) {
+      throw closedException();
+    }
+    ThreadPoolExecutor pool = executor;
     if (pool == null) {
       ThreadFactory factory =
           runnable -> {
-            Thread thread = new Thread(runnable, "manyfold-" + poolId + "-" + names.size());
+            Thread thread =
+                new Thread(runnable, "manyfold-" + poolId + "-" + threadIndex.incrementAndGet());
             thread.setDaemon(true);
             return thread;
           };
-      pool = Executors.newFixedThreadPool(names.size(), factory);
+      pool =
+          new ThreadPoolExecutor(
+              names.size(),
+              names.size(),
+              KEEP_ALIVE_SECONDS,
+              TimeUnit.SECONDS,
+              new LinkedBlockingQueue<>(),
+              factory);
+      pool.allowCoreThreadTimeOut(true);
       executor = pool;
     }
     return pool;
   }
 
-  /** Stops the pool. Safe to call more than once. */
+  /**
+   * Stops the pool and fails every operation that was queued or is submitted later. Safe to call
+   * more than once.
+   */
   @Override
-  public synchronized void close() {
-    if (executor != null) {
-      executor.shutdownNow();
+  public void close() {
+    ThreadPoolExecutor pool;
+    synchronized (this) {
+      closed = true;
+      pool = executor;
       executor = null;
+    }
+    if (pool != null) {
+      // shutdownNow drops queued tasks without completing their futures, which would leave a
+      // waiting thread blocked forever. Cancel them so every waiter is released.
+      for (Runnable queued : pool.shutdownNow()) {
+        if (queued instanceof Future<?> future) {
+          future.cancel(false);
+        }
+      }
     }
   }
 }

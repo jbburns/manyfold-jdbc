@@ -16,6 +16,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
+import java.sql.SQLDataException;
 import java.sql.SQLException;
 import java.sql.SQLWarning;
 import java.sql.Statement;
@@ -212,6 +213,63 @@ class ResultSetHandlerTest {
       assertThatThrownBy(rs::close).isSameAs(firstFailure);
       assertThat((Throwable) firstFailure.getNextException()).isNull();
       verify(second).close();
+    }
+  }
+
+  @Test
+  void aFailureFromNextNamesTheBackendAndKeepsTheSubtype() throws Exception {
+    ResultSet first = cursor();
+    ResultSet second = cursor();
+    when(first.next()).thenReturn(false);
+    when(second.next()).thenThrow(new SQLDataException("bad row", "22018", 3));
+
+    try (Connection conn = mocks.open();
+        ResultSet rs = mergedMocks(first, second, conn)) {
+      assertThatThrownBy(rs::next)
+          .isExactlyInstanceOf(SQLDataException.class)
+          .hasMessage("Backend 'b' failed: bad row")
+          .satisfies(e -> assertThat(((SQLException) e).getSQLState()).isEqualTo("22018"));
+    }
+  }
+
+  @Test
+  void aFailureFromAColumnGetterNamesTheBackendThatOwnsTheCurrentRow() throws Exception {
+    ResultSet first = cursor();
+    ResultSet second = cursor();
+    when(first.next()).thenReturn(true, false);
+    when(second.next()).thenReturn(false);
+    when(first.getString(1)).thenThrow(new SQLException("no such column", "42S22"));
+    when(first.getInt("missing")).thenThrow(new SQLException("no label", "S0022"));
+    when(first.findColumn("missing")).thenThrow(new SQLException("no label", "S0022"));
+
+    try (Connection conn = mocks.open();
+        ResultSet rs = mergedMocks(first, second, conn)) {
+      assertThat(rs.next()).isTrue();
+
+      assertThatThrownBy(() -> rs.getString(2))
+          .isInstanceOf(SQLException.class)
+          .hasMessage("Backend 'a' failed: no such column");
+      assertThatThrownBy(() -> rs.getInt("missing")).hasMessage("Backend 'a' failed: no label");
+      assertThatThrownBy(() -> rs.findColumn("missing")).hasMessage("Backend 'a' failed: no label");
+    }
+  }
+
+  @Test
+  void aNullColumnLabelIsASqlExceptionWithStateInvalidParameter() throws Exception {
+    try (Connection conn = DriverManager.getConnection(dbs.manyfoldUrl());
+        Statement s = conn.createStatement();
+        ResultSet rs = s.executeQuery("SELECT id FROM orders")) {
+      assertThat(rs.next()).isTrue();
+
+      assertThatThrownBy(() -> rs.findColumn(null))
+          .isInstanceOf(SQLException.class)
+          .satisfies(e -> assertThat(((SQLException) e).getSQLState()).isEqualTo("22023"));
+      assertThatThrownBy(() -> rs.getString((String) null))
+          .isInstanceOf(SQLException.class)
+          .satisfies(e -> assertThat(((SQLException) e).getSQLState()).isEqualTo("22023"));
+      assertThatThrownBy(() -> rs.getObject((String) null, String.class))
+          .isInstanceOf(SQLException.class)
+          .satisfies(e -> assertThat(((SQLException) e).getSQLState()).isEqualTo("22023"));
     }
   }
 }

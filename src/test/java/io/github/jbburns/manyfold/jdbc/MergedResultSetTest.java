@@ -13,6 +13,7 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLDataException;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
+import java.sql.SQLSyntaxErrorException;
 import java.sql.Statement;
 import java.sql.Types;
 import java.util.ArrayList;
@@ -199,7 +200,7 @@ class MergedResultSetTest {
     }
     try (Statement s = conn.createStatement()) {
       assertThatThrownBy(() -> s.executeQuery("SELECT * FROM only_here"))
-          .isInstanceOf(ManyfoldException.class)
+          .isInstanceOf(SQLSyntaxErrorException.class)
           .hasMessageStartingWith("Backend 'dev' failed:")
           .hasMessageContaining("ONLY_HERE")
           .satisfies(
@@ -219,12 +220,12 @@ class MergedResultSetTest {
   void failuresOnEveryBackendAreChained() throws Exception {
     try (Statement s = conn.createStatement()) {
       assertThatThrownBy(() -> s.executeQuery("SELECT * FROM no_such_table"))
-          .isInstanceOf(ManyfoldException.class)
+          .isInstanceOf(SQLSyntaxErrorException.class)
           .hasMessageStartingWith("Backend 'prod' failed:")
           .satisfies(
               e -> {
                 SQLException next = ((SQLException) e).getNextException();
-                assertThat((Throwable) next).isInstanceOf(ManyfoldException.class);
+                assertThat((Throwable) next).isInstanceOf(SQLSyntaxErrorException.class);
                 assertThat(next.getMessage()).startsWith("Backend 'dev' failed:");
               });
     }

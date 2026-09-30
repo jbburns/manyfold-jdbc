@@ -62,4 +62,10 @@ public final class Proxies {
             new Class<?>[] {DatabaseMetaData.class},
             new DatabaseMetaDataHandler(primary, connection));
   }
+
+  static ResultSet metaDataResultSet(ResultSet delegate) {
+    return (ResultSet)
+        Proxy.newProxyInstance(
+            loader(), new Class<?>[] {ResultSet.class}, new MetaDataResultSetHandler(delegate));
+  }
 }

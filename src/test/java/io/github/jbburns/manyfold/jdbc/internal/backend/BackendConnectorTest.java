@@ -50,7 +50,7 @@ class BackendConnectorTest {
       String url = "jdbc:manyfold:x=" + driver.url("nothing;password=s3cret");
 
       assertThatThrownBy(() -> DriverManager.getConnection(url))
-          .isInstanceOf(ManyfoldException.class)
+          .isInstanceOf(SQLException.class)
           .hasMessageStartingWith("Backend 'x' failed:")
           .hasMessageNotContaining("s3cret");
     }
@@ -65,7 +65,7 @@ class BackendConnectorTest {
       String url = url(driver, "", "first", "second");
 
       assertThatThrownBy(() -> DriverManager.getConnection(url))
-          .isInstanceOf(ManyfoldException.class)
+          .isInstanceOf(SQLException.class)
           .hasMessageStartingWith("Backend 'second' failed:")
           .hasMessageContaining("host unreachable")
           .hasCause(vendor)
@@ -85,7 +85,7 @@ class BackendConnectorTest {
       String url = url(driver, "", "only");
 
       assertThatThrownBy(() -> DriverManager.getConnection(url))
-          .isInstanceOf(ManyfoldException.class)
+          .isInstanceOf(SQLException.class)
           .hasMessageStartingWith("Backend 'only' failed:")
           .hasCause(vendor);
     }
