@@ -32,6 +32,46 @@ jdbc:manyfold:prod=jdbc:postgresql://prod-host:5432/app || dev=jdbc:postgresql:/
 By default the driver is **read-only**: anything that is not a query is refused before it
 reaches a backend. Set `readOnly=false` in the URL options to fan writes out to every backend.
 
+## Try it in five minutes
+
+You do not need a database server to see the driver work. Two H2 in-memory databases are enough,
+and the URL below creates and fills both of them when you connect.
+
+```
+./gradlew clientBundle
+```
+
+The task copies two jars into `build/client/`: `manyfold-jdbc-0.1.0-SNAPSHOT.jar` (the driver)
+and `h2-2.5.252.jar` (the backend). Then, in SQuirreL SQL:
+
+1. Create the driver definition as described in [SQuirreL SQL](#squirrel-sql). On the **Extra
+   Class Path** tab add **both** jars from `build/client/`.
+2. Create an alias for that driver and paste this URL. It must be on one line. Leave the user
+   name and password empty.
+
+```
+jdbc:manyfold:prod=jdbc:h2:mem:prod;DB_CLOSE_DELAY=-1;INIT=CREATE TABLE IF NOT EXISTS orders AS SELECT * FROM (VALUES (1, 'alice', 10.50), (2, 'bob', 20.00)) AS t(id, customer, amount) || dev=jdbc:h2:mem:dev;DB_CLOSE_DELAY=-1;INIT=CREATE TABLE IF NOT EXISTS orders AS SELECT * FROM (VALUES (3, 'carol', 30.25)) AS t(id, customer, amount)
+```
+
+3. Connect and run these three statements, one at a time:
+
+| Statement | Expect |
+|---|---|
+| `SELECT * FROM orders ORDER BY id` | Three rows. `source_database` is `prod`, `prod`, `dev`. |
+| `SELECT count(*) FROM orders` | Two rows: `2` from `prod` and `1` from `dev`. |
+| `DELETE FROM orders` | Refused with `Refused in read-only mode`. Nothing is deleted. |
+
+`source_database` is added by the driver, so it is not a column of `orders` and you cannot
+filter or group by it in your SQL. Each backend answers the count for itself, which is why you
+get one row per backend.
+
+The in-memory databases live only while SQuirreL is running. H2 keeps them per driver
+definition, so a second alias on the same driver definition sees the same data, and restarting
+SQuirreL starts from scratch. The `IF NOT EXISTS` in the URL keeps a reconnect from adding the
+rows twice.
+
+To try fan-out writes, insert `readOnly=false;` right after `jdbc:manyfold:` in the same URL.
+
 ## URL syntax
 
 ```

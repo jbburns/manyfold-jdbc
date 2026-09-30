@@ -1,4 +1,5 @@
 import net.ltgt.gradle.errorprone.errorprone
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
 
 plugins {
     `java-library`
@@ -93,6 +94,26 @@ tasks.test {
     useJUnitPlatform()
     jvmArgs(mockitoAgentArgs)
     finalizedBy(tasks.jacocoTestReport)
+}
+
+// Everything needed to try the driver in a SQL client with no other database installed: the
+// driver jar plus the H2 jar (a test-only dependency, so it is resolved from the test classpath).
+val clientBundle = tasks.register<Copy>("clientBundle") {
+    description = "Copies the driver jar and the H2 jar into build/client for use in a SQL client."
+    group = "distribution"
+    val h2Jar = configurations.testRuntimeClasspath.get().incoming.artifactView {
+        componentFilter { id ->
+            id is ModuleComponentIdentifier && id.group == "com.h2database" && id.module == "h2"
+        }
+    }.files
+    val outDir = layout.buildDirectory.dir("client")
+    from(tasks.jar)
+    from(h2Jar)
+    into(outDir)
+    doLast {
+        val names = source.files.map { it.name }.sorted()
+        names.forEach { println("client bundle: ${outDir.get().asFile.resolve(it)}") }
+    }
 }
 
 // The bytecode targets Java 17, so the same test classes are run once more on a JDK 17 launcher.
