@@ -65,6 +65,28 @@ before the first backend: `sourceColumn` (default `source_database`), `readOnly`
 `true`). Per-backend credentials go in the connection `Properties` as `manyfold.<name>.user`
 and `manyfold.<name>.password`; the plain `user` and `password` properties apply to all.
 
+## Proving a feature with screenshots
+
+Unit tests are not the finish line for a feature that changes what a user sees. The GUI
+validation harness in `validation/` drives a real SQuirreL SQL against the driver and saves
+screenshots. See DEVELOPING.md for the setup. For any change that affects results, columns,
+errors, URL syntax or options:
+
+1. Extend the harness so it exercises the change: add or adjust a statement and a screenshot
+   step in `validation/run.sh`, and in the seed SQL under `validation/db/` if the demo data
+   needs it. Keep the existing steps working.
+2. Run `validation/run.sh` (two H2 backends, no other software) and, when the change could
+   behave differently on a real database, `MODE=multi validation/run.sh` as well. In a
+   container without Docker, `validation/db/start-local.sh` installs and seeds MariaDB and
+   PostgreSQL natively first.
+3. Look at every new screenshot yourself before claiming it passed, then send the ones that
+   show the feature to the person you are working with and attach them to the pull request.
+4. If the grid at the top of the README no longer matches what the driver does, refresh
+   `docs/images/squirrel-prod-dev.png` from the new `03-select-all.png` (crop to the editor
+   and grid, about 1600 by 475).
+
+The harness is deliberately not in CI. Do not add it there.
+
 ## Testing conventions
 
 - JUnit 5, AssertJ, Mockito. H2 in-memory databases are the primary fake backends; sqlite-jdbc
