@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, "claude/**"]
 
 # Least privilege by default; individual jobs raise what they need.
 permissions:
@@ -67,7 +67,7 @@ jobs:
 
   dependency-submission:
     name: Submit dependency graph
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
