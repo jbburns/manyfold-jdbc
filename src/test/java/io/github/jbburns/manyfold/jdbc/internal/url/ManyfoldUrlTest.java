@@ -185,4 +185,22 @@ class ManyfoldUrlTest {
   private static java.util.Map.Entry<Object, Object> entry(String k, String v) {
     return java.util.Map.entry(k, v);
   }
+
+  @Test
+  void nullUrlIsRejectedWithManyfoldExceptionNotNpe() {
+    assertThatThrownBy(() -> ManyfoldUrl.parse(null, new Properties()))
+        .isInstanceOf(ManyfoldException.class)
+        .hasMessageStartingWith("Invalid manyfold URL");
+  }
+
+  @Test
+  void redactedHidesSecretsThatTheOldPatternsMissed() throws Exception {
+    ManyfoldUrl url =
+        parse(
+            "jdbc:manyfold:a=jdbc:oracle:thin:scott/s3cret@//h:1521/svc"
+                + " || b=jdbc:postgresql://u:p@ss@h/db?sslpassword=s3cret");
+
+    assertThat(url.redacted()).doesNotContain("s3cret").doesNotContain("ss@");
+    assertThat(url.toString()).doesNotContain("s3cret");
+  }
 }

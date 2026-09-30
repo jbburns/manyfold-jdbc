@@ -36,6 +36,18 @@ class ReadOnlyGuardTest {
         "SELECT * FROM t /* DROP TABLE t */",
         "SELECT inserted_at, updated_by, deletion_reason FROM t",
         "SELECT count(*) FROM t WHERE created > now()",
+        "SELECT REPLACE(a, 'x', 'y') FROM t",
+        "SELECT * FROM t WHERE set_at > now()",
+        "SELECT * FROM t WHERE begin_date < commit_date",
+        "SELECT 1;",
+        "SELECT 1 ;  -- trailing comment\n  /* and another */ ",
+        "SELECT 1; ",
+        "SELECT a$1, t$2 FROM t WHERE x = $1",
+        "SELECT 1 -- a comment\nFROM t",
+        "SELECT 1 --",
+        "SELECT 5 - -3",
+        "SELECT 'a;b; DROP TABLE t' FROM t",
+        "SELECT \"a;b\" FROM t",
       })
   void allowsReads(String sql) {
     assertThatCode(() -> ReadOnlyGuard.check(sql)).doesNotThrowAnyException();
@@ -69,6 +81,30 @@ class ReadOnlyGuardTest {
         "   ",
         "-- nothing but a comment",
         "'a string on its own'",
+        "ANALYZE t",
+        "REPLACE INTO t VALUES (1)",
+        "LOAD DATA INFILE 'x' INTO TABLE t",
+        "START TRANSACTION",
+        "ROLLBACK",
+        "SAVEPOINT s",
+        "IMPORT FOREIGN SCHEMA s FROM SERVER x INTO y",
+        "SET x = 1",
+        "SELECT 1; PRAGMA user_version = 5",
+        "PRAGMA user_version = 5",
+        "SELECT * FROM t WHERE x = 1 AND PRAGMA_x() = 1 OR ATTACH = 1",
+        "SELECT lo_import('/etc/passwd') FROM t WHERE DO = 1",
+        "SELECT 1 FROM t WHERE NOTIFY = 1",
+        "SELECT 1 FROM t WHERE vacuum = 1",
+        "SELECT 1 FROM t WHERE COMMENT = 1",
+        "SELECT 1 FROM t WHERE checkpoint = 1",
+        "SELECT 1 FROM t WHERE prepare = 1",
+        "SELECT 1 FROM t WHERE discard = 1",
+        "SELECT 1 FROM t WHERE refresh = 1",
+        "SELECT 1 FROM t WHERE detach = 1",
+        "SELECT 1 FROM t WHERE shutdown = 1",
+        "SELECT 1 FROM t WHERE deallocate = 1",
+        "SELECT 1 FROM t WHERE cluster = 1",
+        "SELECT 1 FROM t WHERE reindex = 1",
       })
   void refusesWrites(String sql) {
     assertThatThrownBy(() -> ReadOnlyGuard.check(sql))
@@ -77,6 +113,63 @@ class ReadOnlyGuardTest {
         .hasMessageContaining("readOnly=false")
         .extracting(e -> ((ManyfoldException) e).getSQLState())
         .isEqualTo(ManyfoldException.STATE_READ_ONLY);
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "SELECT 1; DROP TABLE t",
+        "SELECT 1;DROP TABLE t",
+        "SELECT 1; SELECT 2",
+        "SELECT 1; -- c\nSELECT 2",
+        "SELECT 1; 2",
+        "SELECT 1;;",
+        "SELECT 1; 'x'",
+        "SELECT 1; PRAGMA user_version = 5",
+        "SELECT 1 FROM t; SET x = 1",
+        "SELECT 1 /* c */ ; /* c */ BEGIN",
+        ";SELECT 1",
+        "SELECT 1--1; DROP TABLE t",
+        "SELECT 1 --1\n; DROP TABLE t",
+      })
+  void refusesMoreThanOneStatement(String sql) {
+    assertThat(ReadOnlyGuard.refusalReason(sql))
+        .isEqualTo("statement contains more than one statement");
+    assertThatThrownBy(() -> ReadOnlyGuard.check(sql)).isInstanceOf(ManyfoldException.class);
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        // PostgreSQL dollar quoting hides the quote characters from a naive tokenizer.
+        "SELECT $$'$$; DROP TABLE t; SELECT $$'$$",
+        "SELECT $tag$'$tag$; DROP TABLE t; SELECT $tag$'$tag$",
+        "SELECT $_t1$ x $_t1$",
+        // MySQL # comment.
+        "SELECT 1 #'\n; DROP TABLE t; SELECT '",
+        "SELECT 1 # harmless",
+        // MySQL executable comments run their body.
+        "SELECT 1 /*! ; DROP TABLE t */",
+        "SELECT 1 /*M! ; DROP TABLE t */",
+        // -- not followed by whitespace is a comment to PostgreSQL but not to MySQL.
+        "SELECT 1--'\n; DROP TABLE t; SELECT '",
+        "SELECT 1--\"\n; DROP TABLE t; SELECT \"",
+        "SELECT 1--/*\n; DROP TABLE t; --*/",
+        // Backslash escapes inside string literals.
+        "SELECT '\\''; DROP TABLE t; SELECT '",
+        "SELECT E'\\'' FROM t",
+        "SELECT 'a\\b' FROM t",
+        "SELECT \"\\\"; DROP TABLE t; SELECT \" FROM t",
+        // A quote inside square brackets is a string to PostgreSQL and text to SQL Server.
+        "SELECT a[ ']' ]; DROP TABLE t; SELECT ' ] FROM t",
+      })
+  void refusesQuotingThatDialectsReadDifferently(String sql) {
+    assertThat(ReadOnlyGuard.refusalReason(sql))
+        .isNotNull()
+        .contains("not supported in read-only mode");
+    assertThatThrownBy(() -> ReadOnlyGuard.check(sql))
+        .isInstanceOf(ManyfoldException.class)
+        .hasMessageContaining("not supported in read-only mode");
   }
 
   @Test

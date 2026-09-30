@@ -52,10 +52,11 @@ public final class ManyfoldUrl {
    * @param url the full URL including the {@code jdbc:manyfold:} prefix
    * @param properties connection properties, which may carry {@code manyfold.*} options
    * @return the parsed URL
-   * @throws ManyfoldException if the URL is malformed
+   * @throws ManyfoldException if the URL is null or malformed
    */
-  public static ManyfoldUrl parse(String url, Properties properties) throws ManyfoldException {
-    if (!accepts(url)) {
+  public static ManyfoldUrl parse(@Nullable String url, Properties properties)
+      throws ManyfoldException {
+    if (url == null || !accepts(url)) {
       throw malformed(url, "it does not start with " + Manyfold.URL_PREFIX);
     }
     String body = url.substring(Manyfold.URL_PREFIX.length());
@@ -163,7 +164,7 @@ public final class ManyfoldUrl {
     return result;
   }
 
-  private static ManyfoldException malformed(String url, String reason) {
+  private static ManyfoldException malformed(@Nullable String url, String reason) {
     return new ManyfoldException(
         "Invalid manyfold URL '" + Redact.url(url) + "': " + reason,
         ManyfoldException.STATE_CONNECTION_FAILURE);

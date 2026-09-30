@@ -64,7 +64,7 @@ public final class ManyfoldDriver implements Driver {
   }
 
   @Override
-  public DriverPropertyInfo[] getPropertyInfo(String url, @Nullable Properties info) {
+  public DriverPropertyInfo[] getPropertyInfo(@Nullable String url, @Nullable Properties info) {
     Properties properties = info == null ? new Properties() : info;
     List<DriverPropertyInfo> result = new ArrayList<>();
     result.add(property("user", properties.getProperty("user"), "User name for every backend"));

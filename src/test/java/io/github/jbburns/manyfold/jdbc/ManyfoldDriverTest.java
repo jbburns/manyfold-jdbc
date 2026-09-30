@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 
+import io.github.jbburns.manyfold.jdbc.internal.backend.Backend;
 import io.github.jbburns.manyfold.jdbc.support.H2Pair;
 import io.github.jbburns.manyfold.jdbc.support.SpyDriver;
 import java.sql.Connection;
@@ -116,5 +117,26 @@ class ManyfoldDriverTest {
       assertThat(c.isValid(1)).isTrue();
       assertThat(c.toString()).startsWith("ManyfoldConnection[").doesNotContain("password");
     }
+  }
+
+  @Test
+  void propertyInfoWithANullUrlReturnsTheDriverWideProperties() {
+    DriverPropertyInfo[] infos = new ManyfoldDriver().getPropertyInfo(null, new Properties());
+
+    assertThat(infos).extracting(i -> i.name).contains("user", "password", "manyfold.readOnly");
+  }
+
+  @Test
+  void connectWithANullUrlReturnsNull() throws Exception {
+    assertThat(new ManyfoldDriver().connect(null, new Properties())).isNull();
+  }
+
+  @Test
+  void backendRecordToStringDoesNotLeakThePassword() {
+    Backend backend =
+        new Backend(
+            "prod", "jdbc:postgresql://u:s3cret@h/db?password=s3cret", mock(Connection.class));
+
+    assertThat(backend.toString()).doesNotContain("s3cret").contains("prod");
   }
 }

@@ -33,6 +33,12 @@ public record BackendSpec(String name, String url) {
       }
     }
     name = name.substring(0, cut).trim();
-    return name.isEmpty() ? url.toLowerCase(Locale.ROOT) : name;
+    return name.isEmpty() ? Redact.url(url).toLowerCase(Locale.ROOT) : name;
+  }
+
+  /** Shows the URL with credentials removed, so the record can be logged safely. */
+  @Override
+  public String toString() {
+    return "BackendSpec[name=" + name + ", url=" + Redact.url(url) + "]";
   }
 }
