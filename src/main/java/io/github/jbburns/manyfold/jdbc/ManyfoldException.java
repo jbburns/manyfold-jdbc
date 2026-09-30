@@ -1,5 +1,6 @@
 package io.github.jbburns.manyfold.jdbc;
 
+import io.github.jbburns.manyfold.jdbc.internal.url.Redact;
 import java.sql.BatchUpdateException;
 import java.sql.SQLDataException;
 import java.sql.SQLException;
@@ -112,7 +113,9 @@ public class ManyfoldException extends SQLException {
    * @return the wrapped exception
    */
   public static SQLException backendFailed(String sourceName, Throwable cause) {
-    String detail = cause.getMessage() != null ? cause.getMessage() : cause.getClass().getName();
+    // Some drivers echo the connection string, password included, in a connect error.
+    String detail =
+        cause.getMessage() != null ? Redact.url(cause.getMessage()) : cause.getClass().getName();
     String message = "Backend '" + sourceName + "' failed: " + detail;
     if (!(cause instanceof SQLException vendor)) {
       return new ManyfoldException(message, null, cause);

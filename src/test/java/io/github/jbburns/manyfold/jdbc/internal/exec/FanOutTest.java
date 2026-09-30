@@ -2,8 +2,13 @@ package io.github.jbburns.manyfold.jdbc.internal.exec;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 
 import io.github.jbburns.manyfold.jdbc.ManyfoldException;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -13,6 +18,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class FanOutTest {
@@ -90,6 +96,103 @@ class FanOutTest {
         .isInstanceOf(SQLException.class)
         .hasMessage("Backend 'c' failed: runtime 3")
         .hasCauseInstanceOf(IllegalStateException.class);
+  }
+
+  @Test
+  void whenOneBackendFailsTheHealthyBackendsCloseableResultsAreClosed() throws Exception {
+    ResultSet healthy = mock(ResultSet.class);
+    ResultSet stubborn = mock(ResultSet.class);
+    SQLException closeFailure = new SQLException("close failed");
+    doThrow(closeFailure).when(stubborn).close();
+
+    assertThatThrownBy(
+            () ->
+                fanOut.parallel(
+                    List.of(0, 1, 2),
+                    i -> {
+                      if (i == 1) {
+                        throw new SQLException("boom", "42000", 1);
+                      }
+                      return i == 0 ? healthy : stubborn;
+                    }))
+        .isInstanceOf(SQLException.class)
+        .hasMessage("Backend 'b' failed: boom")
+        .satisfies(e -> assertThat(e.getSuppressed()).containsExactly(closeFailure));
+    verify(healthy).close();
+    verify(stubborn).close();
+  }
+
+  @Test
+  void sequentialFailuresAlsoCloseTheHealthyResults() throws Exception {
+    ResultSet healthy = mock(ResultSet.class);
+
+    assertThatThrownBy(
+            () ->
+                fanOut.sequential(
+                    List.of(0, 1),
+                    i -> {
+                      if (i == 1) {
+                        throw new SQLException("boom");
+                      }
+                      return healthy;
+                    }))
+        .isInstanceOf(SQLException.class);
+    verify(healthy).close();
+  }
+
+  @Test
+  void resultsAreNotClosedWhenEveryBackendSucceeds() throws Exception {
+    ResultSet one = mock(ResultSet.class);
+    ResultSet two = mock(ResultSet.class);
+
+    fanOut.parallel(List.of(one, two), rs -> rs);
+
+    verify(one, never()).close();
+    verify(two, never()).close();
+  }
+
+  @Test
+  void interruptingTheWaiterRunsTheInterruptHookBeforeRethrowing() throws Exception {
+    FanOut shared = new FanOut(List.of("a", "b"));
+    CountDownLatch started = new CountDownLatch(2);
+    CountDownLatch never = new CountDownLatch(1);
+    AtomicInteger hooked = new AtomicInteger();
+    AtomicReference<Throwable> thrown = new AtomicReference<>();
+    AtomicReference<Boolean> flag = new AtomicReference<>();
+    Thread waiter =
+        new Thread(
+            () -> {
+              try {
+                shared.parallel(
+                    List.of(1, 2),
+                    i -> {
+                      started.countDown();
+                      never.await();
+                      return i;
+                    },
+                    () -> {
+                      hooked.incrementAndGet();
+                      throw new IllegalStateException("ignored");
+                    });
+              } catch (Throwable t) {
+                thrown.set(t);
+                flag.set(Thread.currentThread().isInterrupted());
+              }
+            });
+    try {
+      waiter.start();
+      assertThat(started.await(5, TimeUnit.SECONDS)).isTrue();
+
+      waiter.interrupt();
+      waiter.join(5000);
+
+      assertThat(waiter.isAlive()).isFalse();
+      assertThat(hooked).hasValue(1);
+      assertThat(thrown.get()).isInstanceOf(SQLException.class).hasMessageContaining("Interrupted");
+      assertThat(flag.get()).isTrue();
+    } finally {
+      shared.close();
+    }
   }
 
   @Test

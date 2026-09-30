@@ -7,6 +7,7 @@ import io.github.jbburns.manyfold.jdbc.internal.url.Redact;
 import java.sql.Connection;
 import java.sql.Driver;
 import java.sql.SQLException;
+import java.sql.SQLWarning;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
@@ -30,8 +31,9 @@ public final class BackendConnector {
    *
    * <p>If any backend fails, the ones already opened are closed and the failure is rethrown with
    * the backend's logical name. In read-only mode every connection is asked for a read-only
-   * transaction; drivers that refuse to change that flag after connecting are tolerated because it
-   * is a hint, not the mechanism that enforces read-only mode.
+   * transaction; drivers that refuse to change that flag after connecting are tolerated, and the
+   * refusal is recorded as a {@link SQLWarning} on the {@link Backend}, because the flag is a hint,
+   * not the mechanism that enforces read-only mode.
    *
    * @param url the parsed manyfold URL
    * @param properties the properties given to the manyfold connection
@@ -72,15 +74,27 @@ public final class BackendConnector {
               + "'",
           ManyfoldException.STATE_CONNECTION_FAILURE);
     }
+    SQLWarning warning = null;
     if (url.options().readOnly()) {
       try {
         connection.setReadOnly(true);
       } catch (SQLException | RuntimeException e) {
         // A hint only. sqlite-jdbc, for one, refuses to change the flag after connecting.
-        // Read-only mode is enforced by the statement guard regardless.
+        // Read-only mode is enforced by the statement guard regardless, but say so.
+        String reason =
+            e.getMessage() != null ? Redact.url(e.getMessage()) : e.getClass().getName();
+        warning =
+            new SQLWarning(
+                "Backend '"
+                    + spec.name()
+                    + "' refused setReadOnly(true), so the database itself is not enforcing"
+                    + " read-only mode; only the statement guard is: "
+                    + reason,
+                "01000",
+                e);
       }
     }
-    return new Backend(spec.name(), spec.url(), connection);
+    return new Backend(spec.name(), spec.url(), connection, warning);
   }
 
   private static void closeQuietly(List<Backend> backends) {

@@ -143,4 +143,23 @@ class ManyfoldExceptionTest {
     // The vendor's own chain is untouched.
     assertThat((Object) third.getNextException()).isNull();
   }
+
+  @Test
+  void aVendorMessageThatEchoesTheConnectionStringDoesNotLeakThePassword() {
+    SQLException vendor =
+        new SQLException(
+            "cannot connect to jdbc:x://h/db?user=a&password=s3cret&ssl=true", "08001");
+    IllegalStateException unchecked =
+        new IllegalStateException("bad url jdbc:postgresql://alice:s3cret@h/db");
+
+    SQLException wrapped = ManyfoldException.backendFailed("prod", vendor);
+    SQLException wrappedUnchecked = ManyfoldException.backendFailed("prod", unchecked);
+
+    assertThat(wrapped.getMessage())
+        .isEqualTo(
+            "Backend 'prod' failed: cannot connect to jdbc:x://h/db?user=a&password=***&ssl=true");
+    assertThat(wrappedUnchecked.getMessage()).doesNotContain("s3cret");
+    assertThat(wrapped.getSQLState()).isEqualTo("08001");
+    assertThat(wrapped.getCause()).isSameAs(vendor);
+  }
 }

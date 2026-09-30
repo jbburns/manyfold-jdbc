@@ -24,6 +24,11 @@ import org.jspecify.annotations.Nullable;
  * columns is delegated to whichever backend cursor is current, so values, conversions and {@code
  * wasNull} behave exactly as the vendor driver implements them. Nothing is buffered.
  *
+ * <p>Vendor objects returned by {@code getArray}, {@code getBlob}, {@code getClob}, {@code
+ * getNClob}, {@code getSQLXML}, {@code getRef}, {@code getObject} and similar getters are the
+ * backend's own objects and are not wrapped, so they remain usable only for as long as the backend
+ * allows.
+ *
  * <p>Every backend must return the same number of columns; a mismatch is reported when the merged
  * result set is created, before any row is read.
  */
@@ -294,11 +299,16 @@ final class ResultSetHandler extends BaseHandler {
     for (ResultSet cursor : cursors) {
       try {
         cursor.close();
-      } catch (SQLException e) {
+      } catch (SQLException | RuntimeException e) {
+        // One misbehaving cursor must not stop the others from closing.
+        SQLException wrapped =
+            e instanceof SQLException sql
+                ? sql
+                : new SQLException("Closing a backend result set failed: " + e, "HY000", e);
         if (failure == null) {
-          failure = e;
+          failure = wrapped;
         } else {
-          failure.setNextException(e);
+          failure.setNextException(wrapped);
         }
       }
     }

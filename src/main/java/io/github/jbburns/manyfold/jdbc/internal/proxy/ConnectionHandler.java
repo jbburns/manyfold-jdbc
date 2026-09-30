@@ -10,6 +10,7 @@ import java.sql.CallableStatement;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.sql.SQLWarning;
 import java.sql.Savepoint;
 import java.sql.Statement;
 import java.util.ArrayList;
@@ -27,8 +28,12 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>Objects that cannot be merged come from the primary (first) backend only: {@code createBlob},
  * {@code createClob}, {@code createNClob}, {@code createSQLXML}, {@code createArrayOf} and {@code
- * createStruct}, {@code getWarnings}, and the parameter metadata of prepared statements. Values
- * created that way are not usable on the other backends.
+ * createStruct}, and the parameter metadata of prepared statements. Values created that way are not
+ * usable on the other backends.
+ *
+ * <p>{@code getWarnings} returns the warnings recorded while connecting, such as a backend that
+ * refused the read-only hint, followed by the primary backend's own warnings. {@code clearWarnings}
+ * clears both.
  */
 final class ConnectionHandler extends BaseHandler {
 
@@ -38,6 +43,7 @@ final class ConnectionHandler extends BaseHandler {
   private final Options options;
   private final String redactedUrl;
   private volatile boolean closed;
+  private volatile List<SQLWarning> openWarnings;
   private @Nullable Connection proxy;
 
   ConnectionHandler(List<Backend> backends, Options options, String redactedUrl) {
@@ -49,9 +55,25 @@ final class ConnectionHandler extends BaseHandler {
       names.add(backend.name());
     }
     this.connections = List.copyOf(conns);
+    this.openWarnings = chain(backends);
     this.fanOut = new FanOut(names);
     this.options = options;
     this.redactedUrl = redactedUrl;
+  }
+
+  /** Links the warnings recorded while opening the backends, in URL order. */
+  private static List<SQLWarning> chain(List<Backend> backends) {
+    List<SQLWarning> warnings = new ArrayList<>();
+    for (Backend backend : backends) {
+      SQLWarning warning = backend.warning();
+      if (warning != null) {
+        if (!warnings.isEmpty()) {
+          warnings.get(warnings.size() - 1).setNextWarning(warning);
+        }
+        warnings.add(warning);
+      }
+    }
+    return List.copyOf(warnings);
   }
 
   void attach(Connection proxy) {
@@ -137,6 +159,21 @@ final class ConnectionHandler extends BaseHandler {
         if (options.readOnly() && !Boolean.TRUE.equals(args[0])) {
           return null;
         }
+        fanOut.sequential(connections, c -> call(method, c, args));
+        return null;
+      }
+      case "getWarnings" -> {
+        List<SQLWarning> ours = openWarnings;
+        SQLWarning primaryWarnings = primary().getWarnings();
+        if (ours.isEmpty()) {
+          return primaryWarnings;
+        }
+        // The last of our own warnings points at whatever the primary reports right now.
+        ours.get(ours.size() - 1).setNextWarning(primaryWarnings);
+        return ours.get(0);
+      }
+      case "clearWarnings" -> {
+        openWarnings = List.of();
         fanOut.sequential(connections, c -> call(method, c, args));
         return null;
       }

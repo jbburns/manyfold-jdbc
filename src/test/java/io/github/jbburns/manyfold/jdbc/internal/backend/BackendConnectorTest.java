@@ -13,6 +13,7 @@ import io.github.jbburns.manyfold.jdbc.support.StubDriver;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
+import java.sql.SQLWarning;
 import java.sql.Statement;
 import org.junit.jupiter.api.Test;
 
@@ -131,6 +132,60 @@ class BackendConnectorTest {
         Connection conn = DriverManager.getConnection(url(driver, "readOnly=false;", "only"))) {
       assertThat(conn.isClosed()).isFalse();
       verify(backend, never()).setReadOnly(true);
+    }
+  }
+
+  @Test
+  void aBackendThatRefusesSetReadOnlyLeavesWarningsAheadOfThePrimarysOwn() throws Exception {
+    Connection first = mock(Connection.class);
+    Connection second = mock(Connection.class);
+    Connection third = mock(Connection.class);
+    doThrow(new SQLException("no read-only for jdbc:x://h/db?password=s3cret"))
+        .when(first)
+        .setReadOnly(true);
+    doThrow(new UnsupportedOperationException("nope")).when(third).setReadOnly(true);
+    SQLWarning primaryOwn = new SQLWarning("primary's own");
+    when(first.getWarnings()).thenReturn(primaryOwn);
+
+    try (StubDriver driver =
+            StubDriver.registered()
+                .connection("first", first)
+                .connection("second", second)
+                .connection("third", third);
+        Connection conn =
+            DriverManager.getConnection(url(driver, "", "first", "second", "third"))) {
+      SQLWarning warning = conn.getWarnings();
+
+      assertThat((Object) warning).isNotNull();
+      assertThat(warning.getMessage())
+          .contains("Backend 'first'")
+          .contains("setReadOnly(true)")
+          .doesNotContain("s3cret");
+      assertThat(warning.getSQLState()).isEqualTo("01000");
+      SQLWarning next = warning.getNextWarning();
+      assertThat((Object) next).isNotNull();
+      assertThat(next.getMessage()).contains("Backend 'third'");
+      assertThat(next.getSQLState()).isEqualTo("01000");
+      assertThat((Object) next.getNextWarning()).isSameAs(primaryOwn);
+
+      conn.clearWarnings();
+
+      verify(first).clearWarnings();
+      verify(second).clearWarnings();
+      verify(third).clearWarnings();
+      when(first.getWarnings()).thenReturn(null);
+      assertThat((Object) conn.getWarnings()).isNull();
+    }
+  }
+
+  @Test
+  void noWarningIsRecordedWhenEveryBackendAcceptsSetReadOnly() throws Exception {
+    Connection first = mock(Connection.class);
+    SQLWarning primaryOwn = new SQLWarning("primary's own");
+    when(first.getWarnings()).thenReturn(primaryOwn);
+    try (StubDriver driver = StubDriver.registered().connection("first", first);
+        Connection conn = DriverManager.getConnection(url(driver, "", "first"))) {
+      assertThat((Object) conn.getWarnings()).isSameAs(primaryOwn);
     }
   }
 }

@@ -73,7 +73,7 @@ public final class DriverResolver {
   private Driver explicit(String url, String className) throws SQLException {
     Driver driver;
     try {
-      Class<?> type = Class.forName(className, true, loader());
+      Class<?> type = Class.forName(className, false, loader());
       driver = type.asSubclass(Driver.class).getDeclaredConstructor().newInstance();
     } catch (ReflectiveOperationException | ClassCastException | LinkageError e) {
       throw new ManyfoldException(

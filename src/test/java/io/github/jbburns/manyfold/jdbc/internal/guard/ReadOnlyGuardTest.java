@@ -48,6 +48,18 @@ class ReadOnlyGuardTest {
         "SELECT 5 - -3",
         "SELECT 'a;b; DROP TABLE t' FROM t",
         "SELECT \"a;b\" FROM t",
+        "(SELECT 1)",
+        "  ( ( SELECT 1 ) ) ",
+        "/* c */ (SELECT 1) UNION (SELECT 2)",
+        "SELECT a.b FROM s.t",
+        "SELECT a.\"b\", \"a\".b FROM s.\"t\"",
+        "SELECT s.delete FROM audit.update",
+        "SELECT \"x\" FROM t",
+        "SELECT 'h\u00e9llo'",
+        "SELECT \"h\u00e9llo\" FROM t",
+        "SELECT 1 -- h\u00e9llo \u0007\nFROM t",
+        "SELECT 1 /* h\u00e9llo */",
+        "SELECT * FROM t WHERE a = '\u2028\u0000'",
       })
   void allowsReads(String sql) {
     assertThatCode(() -> ReadOnlyGuard.check(sql)).doesNotThrowAnyException();
@@ -128,7 +140,6 @@ class ReadOnlyGuardTest {
         "SELECT 1; PRAGMA user_version = 5",
         "SELECT 1 FROM t; SET x = 1",
         "SELECT 1 /* c */ ; /* c */ BEGIN",
-        ";SELECT 1",
         "SELECT 1--1; DROP TABLE t",
         "SELECT 1 --1\n; DROP TABLE t",
       })
@@ -181,11 +192,112 @@ class ReadOnlyGuardTest {
     assertThat(ReadOnlyGuard.refusalReason("SELECT 1")).isNull();
   }
 
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "\"SELECT\" 1",
+        "[SELECT] 1",
+        "`SELECT` 1",
+        "'SELECT'",
+        "s.SELECT 1",
+        "a.b",
+        ";SELECT 1",
+        "; SELECT 1",
+        "-SELECT 1",
+        "+ SELECT 1",
+        "* SELECT 1",
+        ", SELECT 1",
+        "1 SELECT",
+        "(;SELECT 1)",
+        "(\"SELECT\")",
+      })
+  void theFirstSignificantTokenMustBeABareAllowlistedWord(String sql) {
+    assertThat(ReadOnlyGuard.refusalReason(sql))
+        .isNotNull()
+        .startsWith("statement starts with '")
+        .endsWith("rather than a query keyword");
+    assertThatThrownBy(() -> ReadOnlyGuard.check(sql)).isInstanceOf(ManyfoldException.class);
+  }
+
   @Test
-  void unterminatedQuotesAndCommentsDoNotLoopOrThrow() {
-    assertThat(ReadOnlyGuard.refusalReason("SELECT 'unterminated")).isNull();
-    assertThat(ReadOnlyGuard.refusalReason("SELECT /* unterminated")).isNull();
-    assertThat(ReadOnlyGuard.refusalReason("SELECT \"unterminated")).isNull();
-    assertThat(ReadOnlyGuard.refusalReason("SELECT [unterminated")).isNull();
+  void aLoneOpeningParenthesisHasNoKeyword() {
+    assertThat(ReadOnlyGuard.refusalReason("(")).isEqualTo("statement is empty");
+    assertThat(ReadOnlyGuard.refusalReason("((")).isEqualTo("statement is empty");
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "SELECT 1 FROM t WHERE x = 1 .delete",
+        "SELECT 1 FROM t .delete FROM t",
+        "SELECT delete. FROM t",
+        "SELECT delete. x FROM t",
+        "SELECT 1 . delete",
+        "SELECT a. delete FROM t",
+        "SELECT 1 FROM t WHERE x IN (.delete)",
+        "SELECT (.update) FROM t",
+        "SELECT a.(delete) FROM t",
+        "SELECT (delete). FROM t",
+        "SELECT 1 FROM t\n.delete",
+        "SELECT 1;.delete",
+      })
+  void aDotOnlyExemptsAKeywordWhenAnIdentifierIsOnTheOtherSide(String sql) {
+    assertThat(ReadOnlyGuard.refusalReason(sql)).isNotNull();
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "SELECT\u00a01",
+        "SELECT\u20281",
+        "SELECT\u00851",
+        "SELECT\u000b1",
+        "SELECT\u000c1",
+        "SELECT\u00001",
+        "SELECT\u001f1",
+        "SELECT\u007f1",
+        "SELECT h\u00e9llo FROM t",
+        "SELECT 1 \u2028DROP TABLE t",
+        "SELECT 1 \u00a0; DROP TABLE t",
+        "\ufeffSELECT 1",
+        "SELECT \uff24ROP FROM t",
+        "SELECT 1\u0000",
+        "SELECT \ud83d\ude00 FROM t",
+      })
+  void refusesNonAsciiAndControlCharactersOutsideQuotesAndComments(String sql) {
+    assertThat(ReadOnlyGuard.refusalReason(sql))
+        .contains("contains characters outside quotes that dialects read differently");
+    assertThatThrownBy(() -> ReadOnlyGuard.check(sql))
+        .isInstanceOf(ManyfoldException.class)
+        .hasMessageContaining("contains characters outside quotes that dialects read differently");
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "SELECT 'unterminated",
+        "SELECT /* unterminated",
+        "SELECT 1 /* unterminated */ /* again",
+        "SELECT \"unterminated",
+        "SELECT `unterminated",
+        "SELECT [unterminated",
+        "SELECT 'it''s",
+        "SELECT 1 /*",
+        "SELECT 1 /*/",
+      })
+  void refusesUnterminatedQuotesAndComments(String sql) {
+    assertThat(ReadOnlyGuard.refusalReason(sql))
+        .isNotNull()
+        .contains("unterminated")
+        .contains("not supported in read-only mode");
+    assertThatThrownBy(() -> ReadOnlyGuard.check(sql)).isInstanceOf(ManyfoldException.class);
+  }
+
+  @Test
+  void aCarriageReturnEndsALineCommentSoAWriteAfterItIsSeen() {
+    // PostgreSQL ends a -- comment at a bare CR; treating it as part of the comment would hide
+    // the DROP.
+    assertThat(ReadOnlyGuard.refusalReason("SELECT 1 -- x\rDROP TABLE t")).isNotNull();
+    assertThat(ReadOnlyGuard.refusalReason("SELECT 1 -- x\r\nFROM t")).isNull();
   }
 }

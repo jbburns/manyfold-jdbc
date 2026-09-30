@@ -25,8 +25,9 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>Executions run on every backend concurrently and their results are merged: result sets become
  * one merged result set, update counts are summed. Parameter setters and other void methods fan out
- * sequentially. Single-valued getters come from the first backend. Streams and readers passed to
- * the streaming parameter setters are read once and replayed to every backend.
+ * sequentially. Single-valued getters come from the first backend. With one backend, streams and
+ * readers passed to the streaming parameter setters go straight through; with several they are read
+ * once, up to any length argument, and replayed to every backend.
  *
  * <p>Some things cannot be merged and come from the primary (first) backend only: {@code
  * getWarnings}, the {@code ParameterMetaData} of a prepared statement, and the OUT parameters of a
@@ -34,6 +35,8 @@ import org.jspecify.annotations.Nullable;
  * not readable through this object.
  */
 final class StatementHandler extends BaseHandler {
+
+  private static final long MAX_BUFFER = Integer.MAX_VALUE - 8;
 
   private final List<Statement> statements;
   private final ConnectionHandler connection;
@@ -74,22 +77,18 @@ final class StatementHandler extends BaseHandler {
       case "executeQuery" -> {
         guard(sqlArgument(method, args));
         List<ResultSet> results =
-            fanOut.parallel(
-                statements, s -> (ResultSet) Objects.requireNonNull(call(method, s, args)));
+            parallel(s -> (ResultSet) Objects.requireNonNull(call(method, s, args)));
         return merged(results);
       }
       case "execute" -> {
         guard(sqlArgument(method, args));
         List<Boolean> results =
-            fanOut.parallel(
-                statements, s -> (Boolean) Objects.requireNonNull(call(method, s, args)));
+            parallel(s -> (Boolean) Objects.requireNonNull(call(method, s, args)));
         return agree(results, "execute");
       }
       case "executeUpdate", "executeLargeUpdate" -> {
         refuseWrite(method.getName(), sqlArgument(method, args));
-        List<Number> counts =
-            fanOut.parallel(
-                statements, s -> (Number) Objects.requireNonNull(call(method, s, args)));
+        List<Number> counts = parallel(s -> (Number) Objects.requireNonNull(call(method, s, args)));
         return sum(counts, method.getReturnType() == long.class);
       }
       case "addBatch" -> {
@@ -99,15 +98,12 @@ final class StatementHandler extends BaseHandler {
       }
       case "executeBatch" -> {
         refuseWrite("executeBatch", null);
-        List<int[]> counts =
-            fanOut.parallel(statements, s -> (int[]) Objects.requireNonNull(call(method, s, args)));
+        List<int[]> counts = parallel(s -> (int[]) Objects.requireNonNull(call(method, s, args)));
         return sumIntArrays(counts);
       }
       case "executeLargeBatch" -> {
         refuseWrite("executeLargeBatch", null);
-        List<long[]> counts =
-            fanOut.parallel(
-                statements, s -> (long[]) Objects.requireNonNull(call(method, s, args)));
+        List<long[]> counts = parallel(s -> (long[]) Objects.requireNonNull(call(method, s, args)));
         return sumLongArrays(counts);
       }
       case "getResultSet", "getGeneratedKeys" -> {
@@ -202,9 +198,26 @@ final class StatementHandler extends BaseHandler {
     }
   }
 
+  /** Runs an execution on every backend concurrently, cancelling all of them on interrupt. */
+  private <T> List<T> parallel(FanOut.Call<Statement, T> call) throws SQLException {
+    return fanOut.parallel(statements, call, this::cancelQuietly);
+  }
+
+  private void cancelQuietly() {
+    for (Statement statement : statements) {
+      try {
+        statement.cancel();
+      } catch (SQLException | RuntimeException e) {
+        // Best effort: the caller is already being told about the interrupt.
+      }
+    }
+  }
+
   /**
-   * Fans out a streaming parameter setter. A stream or reader can be consumed only once, so it is
-   * buffered and every backend receives its own fresh copy. Any length argument passes through.
+   * Fans out a streaming parameter setter. With one backend the stream or reader is passed straight
+   * through. With several, a stream can be consumed only once, so it is buffered and every backend
+   * receives its own fresh copy. A length argument limits how much is read and passes through
+   * unchanged.
    */
   private void setStream(Method method, Object[] args) throws Throwable {
     int index = -1;
@@ -214,19 +227,25 @@ final class StatementHandler extends BaseHandler {
         break;
       }
     }
-    if (index < 0) {
+    if (index < 0 || statements.size() == 1) {
       fanOut.sequential(statements, s -> call(method, s, args));
       return;
     }
     int streamIndex = index;
     Object source = args[streamIndex];
+    long limit = -1;
+    if (args.length > streamIndex + 1
+        && args[streamIndex + 1] instanceof Number length
+        && length.longValue() >= 0) {
+      limit = length.longValue();
+    }
     byte[] bytes = null;
     String text = null;
     try {
       if (source instanceof InputStream in) {
-        bytes = in.readAllBytes();
+        bytes = limit < 0 ? in.readAllBytes() : in.readNBytes((int) Math.min(limit, MAX_BUFFER));
       } else {
-        text = readAll((Reader) source);
+        text = readAtMost((Reader) source, limit);
       }
     } catch (IOException e) {
       throw new ManyfoldException(
@@ -248,11 +267,18 @@ final class StatementHandler extends BaseHandler {
         });
   }
 
-  private static String readAll(Reader reader) throws IOException {
+  /** Reads at most {@code limit} characters, or everything when {@code limit} is negative. */
+  private static String readAtMost(Reader reader, long limit) throws IOException {
     StringWriter out = new StringWriter();
     char[] buffer = new char[8192];
-    for (int n = reader.read(buffer); n >= 0; n = reader.read(buffer)) {
+    long remaining = limit < 0 ? Long.MAX_VALUE : limit;
+    while (remaining > 0) {
+      int n = reader.read(buffer, 0, (int) Math.min(buffer.length, remaining));
+      if (n < 0) {
+        break;
+      }
       out.write(buffer, 0, n);
+      remaining -= n;
     }
     return out.toString();
   }

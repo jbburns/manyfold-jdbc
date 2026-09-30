@@ -38,6 +38,12 @@ public final class MockedPair implements AutoCloseable {
     return DriverManager.getConnection(url(options));
   }
 
+  /** Opens a manyfold connection over mock {@code a} alone, with the given leading options. */
+  public Connection openFirstOnly(String options) throws SQLException {
+    return DriverManager.getConnection(
+        "jdbc:manyfold:" + (options.isEmpty() ? "" : options + ";") + "a=" + driver.url("a"));
+  }
+
   private String url(String options) {
     return "jdbc:manyfold:"
         + (options.isEmpty() ? "" : options + ";")

@@ -201,6 +201,33 @@ class ResultSetHandlerTest {
   }
 
   @Test
+  void anUncheckedFailureFromOneCursorDoesNotStopTheOthersClosing() throws Exception {
+    ResultSet first = cursor();
+    ResultSet second = cursor();
+    IllegalStateException bug = new IllegalStateException("driver bug");
+    SQLException secondFailure = new SQLException("second close failed");
+    doThrow(bug).when(first).close();
+    doThrow(secondFailure).when(second).close();
+    when(mocks.statementA.executeQuery("SELECT 1")).thenReturn(first);
+    when(mocks.statementB.executeQuery("SELECT 1")).thenReturn(second);
+
+    try (Connection conn = mocks.open()) {
+      ResultSet rs = conn.createStatement().executeQuery("SELECT 1");
+
+      assertThatThrownBy(rs::close)
+          .isInstanceOf(SQLException.class)
+          .hasCause(bug)
+          .satisfies(
+              e ->
+                  assertThat((Throwable) ((SQLException) e).getNextException())
+                      .isSameAs(secondFailure));
+      verify(first).close();
+      verify(second).close();
+      assertThat(rs.isClosed()).isTrue();
+    }
+  }
+
+  @Test
   void closeStillClosesLaterCursorsWhenOnlyTheFirstFails() throws Exception {
     ResultSet first = cursor();
     ResultSet second = cursor();

@@ -12,20 +12,25 @@ public final class Redact {
 
   /**
    * {@code scheme://user:secret@host} becomes {@code scheme://host}. User info runs to the last
-   * {@code @} before the next {@code /}, {@code ?} or {@code ;}, so a password may contain
-   * {@code @}.
+   * {@code @} before the next {@code /}, so a password may contain {@code @}, {@code ?} and {@code
+   * ;}.
    */
-  private static final Pattern USER_INFO = Pattern.compile("(//)[^/?;|]*@");
+  private static final Pattern USER_INFO = Pattern.compile("(//)[^/|]*@");
 
   /**
-   * Any parameter whose name contains a password-like word, such as {@code password}, {@code
-   * sslpassword}, {@code trustStorePassword}, {@code secret} or {@code token}. The value is either
-   * a brace-delimited group, which may contain {@code ;}, or runs to the next separator.
+   * Any parameter whose name contains a secret-like word, such as {@code password}, {@code
+   * sslpassword}, {@code secret}, {@code token}, {@code apikey}, {@code sslkey} or {@code
+   * credentials}. The parameter may follow {@code ?}, {@code ;}, {@code &}, {@code ,} or, for DB2,
+   * {@code :}. The value is either a brace-delimited group, which may contain {@code ;}, or runs to
+   * the next {@code ;}, {@code &}, {@code |} or the end of the string, and so may contain spaces.
+   * Whitespace just before the terminator is left alone.
    */
   private static final Pattern SECRET_PARAM =
       Pattern.compile(
-          "(?i)([?;&,][^=?;&,|\\s]*(?:password|pwd|passwd|pass|secret|token)[^=?;&,|\\s]*\\s*=)"
-              + "(?:\\{[^}]*\\}|[^;&|\\s]*)");
+          "(?i)([?;&,:][^=?;&,:|\\s]*"
+              + "(?:password|pwd|passwd|pass|secret|token|key|credential|auth)"
+              + "[^=?;&,:|\\s]*\\s*=)"
+              + "(?:\\{[^}]*\\}|\\{[^}]*\\z|[^;&|]*?(?=\\s*(?:[;&|]|\\z)))");
 
   private Redact() {}
 
@@ -40,7 +45,8 @@ public final class Redact {
       return "null";
     }
     String result = ORACLE_USER_INFO.matcher(url).replaceAll("$1@");
-    result = USER_INFO.matcher(result).replaceAll("$1");
-    return SECRET_PARAM.matcher(result).replaceAll("$1***");
+    // Parameters first, so a secret containing '@' does not swallow the host in front of it.
+    result = SECRET_PARAM.matcher(result).replaceAll("$1***");
+    return USER_INFO.matcher(result).replaceAll("$1");
   }
 }

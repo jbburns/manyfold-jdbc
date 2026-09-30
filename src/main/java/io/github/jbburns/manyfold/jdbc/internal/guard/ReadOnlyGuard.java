@@ -22,6 +22,12 @@ import org.jspecify.annotations.Nullable;
  * literal, and {@code --} not followed by whitespace when the rest of that line contains a quote
  * character.
  *
+ * <p>The first significant token must be a bare word on the allowlist; only opening parentheses may
+ * precede it, so {@code (SELECT 1)} is allowed but a quoted name, a dotted name or punctuation at
+ * the start is refused. Any non-ASCII or control character outside quotes and comments is refused,
+ * because dialects disagree on whether it is whitespace or part of a name. An unterminated comment
+ * or quote is refused instead of being read as running to the end of the statement.
+ *
  * <p>What it cannot catch is a read-only-looking statement that calls a function with side effects.
  * For that the driver also asks every backend connection for a read-only transaction, which some
  * databases enforce and others treat as a hint.
@@ -113,6 +119,15 @@ public final class ReadOnlyGuard {
     boolean ended = false;
     Tokenizer tokens = new Tokenizer(sql);
     for (Token token = tokens.next(); token != null; token = tokens.next()) {
+      if (tokens.unsupported != null) {
+        break;
+      }
+      if (first == null && token.kind() == Kind.OPEN_PAREN) {
+        continue;
+      }
+      if (first == null && token.kind() != Kind.WORD) {
+        return "statement starts with '" + token.text() + "' rather than a query keyword";
+      }
       if (ended) {
         return "statement contains more than one statement";
       }
@@ -149,6 +164,8 @@ public final class ReadOnlyGuard {
     WORD,
     /** An unquoted, uncommented {@code ;}. */
     SEMICOLON,
+    /** An opening parenthesis, which may precede the first keyword. */
+    OPEN_PAREN,
     /** Anything else that is not whitespace or a comment: quoted text, numbers, operators. */
     OTHER
   }
@@ -161,7 +178,8 @@ public final class ReadOnlyGuard {
    */
   private static final class Tokenizer {
     private static final Token SEMICOLON = new Token(Kind.SEMICOLON, ";");
-    private static final Token OTHER = new Token(Kind.OTHER, "");
+    private static final Token OPEN_PAREN = new Token(Kind.OPEN_PAREN, "(");
+    private static final int SNIPPET = 24;
 
     private final String sql;
     private int pos;
@@ -177,10 +195,14 @@ public final class ReadOnlyGuard {
       int n = sql.length();
       while (pos < n && unsupported == null) {
         char c = sql.charAt(pos);
-        if (Character.isWhitespace(c)) {
+        if (c > 126 || (c < 32 && c != ' ' && c != '\t' && c != '\r' && c != '\n')) {
+          // Dialects disagree on whether these are whitespace, part of a name or an error.
+          unsupported =
+              "statement contains characters outside quotes that dialects read differently";
+        } else if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
           pos++;
         } else if (c == '-' && peek(1) == '-' && endsComment(pos + 2)) {
-          skipUntil('\n');
+          skipLine();
         } else if (c == '-' && peek(1) == '-' && lineOpensQuote(pos + 2)) {
           unsupported = "statement has '--' not followed by whitespace before a quote";
         } else if (c == '/' && peek(1) == '*') {
@@ -189,6 +211,9 @@ public final class ReadOnlyGuard {
           } else {
             pos += 2;
             int end = sql.indexOf("*/", pos);
+            if (end < 0) {
+              unsupported = "statement has an unterminated comment";
+            }
             pos = end < 0 ? n : end + 2;
           }
         } else if (c == '#') {
@@ -196,11 +221,16 @@ public final class ReadOnlyGuard {
         } else if (c == '$' && startsDollarQuote(pos)) {
           unsupported = "statement uses dollar quoting";
         } else if (c == '\'' || c == '"' || c == '`') {
+          int start = pos;
           skipQuoted(c);
-          return OTHER;
+          return other(start);
         } else if (c == '[') {
+          int start = pos;
           int end = sql.indexOf(']', pos);
           int stop = end < 0 ? n : end;
+          if (end < 0) {
+            unsupported = "statement has an unterminated square bracket";
+          }
           for (int i = pos + 1; i < stop; i++) {
             char inner = sql.charAt(i);
             if (inner == '\'' || inner == '"' || inner == '`') {
@@ -208,27 +238,50 @@ public final class ReadOnlyGuard {
             }
           }
           pos = end < 0 ? n : end + 1;
-          return OTHER;
+          return other(start);
         } else if (c == ';') {
           pos++;
           return SEMICOLON;
-        } else if (Character.isLetter(c) || c == '_') {
+        } else if (c == '(') {
+          pos++;
+          return OPEN_PAREN;
+        } else if (isWordStart(c)) {
           int start = pos;
-          while (pos < n
-              && (Character.isLetterOrDigit(sql.charAt(pos)) || sql.charAt(pos) == '_')) {
+          while (pos < n && isWordChar(sql.charAt(pos))) {
             pos++;
           }
-          // A dotted name such as schema.delete is a qualified identifier, not a keyword.
-          if ((start > 0 && sql.charAt(start - 1) == '.') || (pos < n && sql.charAt(pos) == '.')) {
-            return OTHER;
+          // A dotted name such as schema.delete is a qualified identifier, not a keyword, but only
+          // when an identifier really sits on the other side of the dot.
+          boolean after = pos + 1 < n && sql.charAt(pos) == '.' && isNameChar(sql.charAt(pos + 1));
+          boolean before =
+              start >= 2 && sql.charAt(start - 1) == '.' && isNameChar(sql.charAt(start - 2));
+          if (before || after) {
+            return other(start);
           }
           return new Token(Kind.WORD, sql.substring(start, pos));
         } else {
           pos++;
-          return OTHER;
+          return other(pos - 1);
         }
       }
       return null;
+    }
+
+    private Token other(int start) {
+      return new Token(Kind.OTHER, sql.substring(start, Math.min(pos, start + SNIPPET)));
+    }
+
+    private static boolean isWordStart(char c) {
+      return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
+    }
+
+    private static boolean isWordChar(char c) {
+      return isWordStart(c) || (c >= '0' && c <= '9');
+    }
+
+    /** A letter, digit or underscore, or the closing quote or bracket of a quoted identifier. */
+    private static boolean isNameChar(char c) {
+      return isWordChar(c) || c == '"' || c == '`' || c == ']';
     }
 
     private char peek(int offset) {
@@ -274,9 +327,12 @@ public final class ReadOnlyGuard {
       return i < sql.length() && sql.charAt(i) == '$';
     }
 
-    private void skipUntil(char terminator) {
-      int end = sql.indexOf(terminator, pos);
-      pos = end < 0 ? sql.length() : end + 1;
+    /** Skips to the end of a line. PostgreSQL ends a line comment at a bare CR as well as LF. */
+    private void skipLine() {
+      int n = sql.length();
+      while (pos < n && sql.charAt(pos) != '\n' && sql.charAt(pos) != '\r') {
+        pos++;
+      }
     }
 
     private void skipQuoted(char quote) {
@@ -298,6 +354,7 @@ public final class ReadOnlyGuard {
         }
         pos++;
       }
+      unsupported = "statement has an unterminated quote";
     }
   }
 }

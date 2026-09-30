@@ -16,6 +16,7 @@ import java.util.Iterator;
 import java.util.Properties;
 import java.util.ServiceConfigurationError;
 import java.util.ServiceLoader;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Logger;
 import org.junit.jupiter.api.Test;
 
@@ -56,6 +57,15 @@ class DriverResolverTest {
     @Override
     public Logger getParentLogger() {
       return Logger.getGlobal();
+    }
+  }
+
+  private static final AtomicInteger INITIALISED = new AtomicInteger();
+
+  /** Not a driver, and it records when its static initialiser runs. */
+  public static final class NotADriver {
+    static {
+      INITIALISED.incrementAndGet();
     }
   }
 
@@ -103,6 +113,17 @@ class DriverResolverTest {
     assertThatThrownBy(() -> resolver.resolve("jdbc:h2:mem:x", "org.example.Missing"))
         .isInstanceOf(ManyfoldException.class)
         .hasMessageContaining("Cannot load JDBC driver class 'org.example.Missing'");
+  }
+
+  @Test
+  void aNamedClassThatIsNotADriverIsRejectedWithoutBeingInitialised() {
+    INITIALISED.set(0);
+
+    assertThatThrownBy(() -> resolver.resolve("jdbc:h2:mem:x", NotADriver.class.getName()))
+        .isInstanceOf(ManyfoldException.class)
+        .hasMessageContaining("Cannot load JDBC driver class '" + NotADriver.class.getName() + "'")
+        .hasCauseInstanceOf(ClassCastException.class);
+    assertThat(INITIALISED).hasValue(0);
   }
 
   @Test

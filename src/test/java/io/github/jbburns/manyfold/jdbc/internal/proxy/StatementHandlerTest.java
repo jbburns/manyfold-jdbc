@@ -2,6 +2,9 @@ package io.github.jbburns.manyfold.jdbc.internal.proxy;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.same;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -10,7 +13,11 @@ import static org.mockito.Mockito.when;
 import io.github.jbburns.manyfold.jdbc.ManyfoldException;
 import io.github.jbburns.manyfold.jdbc.support.H2Pair;
 import io.github.jbburns.manyfold.jdbc.support.MockedPair;
+import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.Reader;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.sql.BatchUpdateException;
@@ -24,10 +31,15 @@ import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.mockito.stubbing.Answer;
 
 class StatementHandlerTest {
 
@@ -402,5 +414,168 @@ class StatementHandlerTest {
         assertThat(rs.next()).isFalse();
       }
     }
+  }
+
+  @Test
+  void interruptingAThreadBlockedInExecuteQueryCancelsEveryBackendStatement() throws Exception {
+    CountDownLatch started = new CountDownLatch(2);
+    CountDownLatch never = new CountDownLatch(1);
+    Answer<ResultSet> blocking =
+        invocation -> {
+          started.countDown();
+          try {
+            never.await();
+          } catch (InterruptedException e) {
+            throw new SQLException("interrupted", e);
+          }
+          return null;
+        };
+    when(mocks.statementA.executeQuery("SELECT 1")).thenAnswer(blocking);
+    when(mocks.statementB.executeQuery("SELECT 1")).thenAnswer(blocking);
+    AtomicReference<Throwable> thrown = new AtomicReference<>();
+    try (Connection conn = mocks.open()) {
+      Statement s = conn.createStatement();
+      Thread caller =
+          new Thread(
+              () -> {
+                try {
+                  s.executeQuery("SELECT 1");
+                } catch (Throwable t) {
+                  thrown.set(t);
+                }
+              });
+      caller.start();
+      assertThat(started.await(5, TimeUnit.SECONDS)).isTrue();
+
+      caller.interrupt();
+      caller.join(5000);
+
+      assertThat(caller.isAlive()).isFalse();
+      assertThat(thrown.get())
+          .isInstanceOf(SQLException.class)
+          .hasMessageContaining("Interrupted while waiting");
+      verify(mocks.statementA).cancel();
+      verify(mocks.statementB).cancel();
+    }
+  }
+
+  @Test
+  void aCancelThatFailsDuringAnInterruptDoesNotHideTheInterrupt() throws Exception {
+    CountDownLatch started = new CountDownLatch(2);
+    CountDownLatch never = new CountDownLatch(1);
+    Answer<ResultSet> blocking =
+        invocation -> {
+          started.countDown();
+          try {
+            never.await();
+          } catch (InterruptedException e) {
+            throw new SQLException("interrupted", e);
+          }
+          return null;
+        };
+    when(mocks.statementA.executeQuery("SELECT 1")).thenAnswer(blocking);
+    when(mocks.statementB.executeQuery("SELECT 1")).thenAnswer(blocking);
+    doThrow(new SQLException("cannot cancel")).when(mocks.statementA).cancel();
+    AtomicReference<Throwable> thrown = new AtomicReference<>();
+    try (Connection conn = mocks.open()) {
+      Statement s = conn.createStatement();
+      Thread caller =
+          new Thread(
+              () -> {
+                try {
+                  s.executeQuery("SELECT 1");
+                } catch (Throwable t) {
+                  thrown.set(t);
+                }
+              });
+      caller.start();
+      assertThat(started.await(5, TimeUnit.SECONDS)).isTrue();
+
+      caller.interrupt();
+      caller.join(5000);
+
+      assertThat(thrown.get()).hasMessageContaining("Interrupted while waiting");
+      verify(mocks.statementB).cancel();
+    }
+  }
+
+  @Test
+  void aFailingBackendClosesTheHealthyBackendsResultSet() throws Exception {
+    ResultSet healthy = mock(ResultSet.class);
+    when(mocks.statementA.executeQuery("SELECT 1")).thenReturn(healthy);
+    when(mocks.statementB.executeQuery("SELECT 1")).thenThrow(new SQLException("down", "08006"));
+
+    try (Connection conn = mocks.open();
+        Statement s = conn.createStatement()) {
+      assertThatThrownBy(() -> s.executeQuery("SELECT 1"))
+          .isInstanceOf(SQLException.class)
+          .hasMessage("Backend 'b' failed: down");
+      verify(healthy).close();
+    }
+  }
+
+  private static String read(InputStream in) throws IOException {
+    return new String(in.readAllBytes(), StandardCharsets.ISO_8859_1);
+  }
+
+  @Test
+  void withOneBackendStreamsAndReadersGoStraightThrough() throws Exception {
+    PreparedStatement ps = mock(PreparedStatement.class);
+    when(mocks.a.prepareStatement("INSERT INTO t VALUES (?)")).thenReturn(ps);
+    InputStream in = new ByteArrayInputStream(new byte[] {1, 2, 3});
+    Reader reader = new StringReader("chars");
+    try (Connection conn = mocks.openFirstOnly("readOnly=false");
+        PreparedStatement p = conn.prepareStatement("INSERT INTO t VALUES (?)")) {
+      p.setBinaryStream(1, in);
+      p.setBinaryStream(1, in, 2L);
+      p.setCharacterStream(2, reader);
+      p.setCharacterStream(2, reader, 3);
+
+      verify(ps).setBinaryStream(eq(1), same(in));
+      verify(ps).setBinaryStream(eq(1), same(in), eq(2L));
+      verify(ps).setCharacterStream(eq(2), same(reader));
+      verify(ps).setCharacterStream(eq(2), same(reader), eq(3));
+      // Untouched: nothing was read on the way through.
+      assertThat(in.available()).isEqualTo(3);
+      assertThat((char) reader.read()).isEqualTo('c');
+    }
+  }
+
+  @Test
+  void withSeveralBackendsALengthLimitsHowMuchIsReadFromTheSource() throws Exception {
+    PreparedStatement psA = mock(PreparedStatement.class);
+    PreparedStatement psB = mock(PreparedStatement.class);
+    when(mocks.a.prepareStatement("INSERT INTO t VALUES (?)")).thenReturn(psA);
+    when(mocks.b.prepareStatement("INSERT INTO t VALUES (?)")).thenReturn(psB);
+    byte[] bytes = new byte[100];
+    for (int i = 0; i < bytes.length; i++) {
+      bytes[i] = (byte) ('a' + i % 26);
+    }
+    InputStream in = new ByteArrayInputStream(bytes);
+    Reader reader = new StringReader("abcdefghij");
+    Reader shortReader = new StringReader("xy");
+
+    try (Connection conn = mocks.open("readOnly=false");
+        PreparedStatement p = conn.prepareStatement("INSERT INTO t VALUES (?)")) {
+      p.setBinaryStream(1, in, 10L);
+      p.setCharacterStream(2, reader, 4);
+      p.setCharacterStream(3, shortReader, 50L);
+    }
+
+    for (PreparedStatement ps : new PreparedStatement[] {psA, psB}) {
+      ArgumentCaptor<InputStream> stream = ArgumentCaptor.forClass(InputStream.class);
+      verify(ps).setBinaryStream(eq(1), stream.capture(), eq(10L));
+      assertThat(read(stream.getValue())).isEqualTo("abcdefghij");
+      ArgumentCaptor<Reader> chars = ArgumentCaptor.forClass(Reader.class);
+      verify(ps).setCharacterStream(eq(2), chars.capture(), eq(4));
+      assertThat(chars.getValue()).isNotSameAs(reader);
+      assertThat(new BufferedReader(chars.getValue()).readLine()).isEqualTo("abcd");
+      ArgumentCaptor<Reader> shorter = ArgumentCaptor.forClass(Reader.class);
+      verify(ps).setCharacterStream(eq(3), shorter.capture(), eq(50L));
+      assertThat(new BufferedReader(shorter.getValue()).readLine()).isEqualTo("xy");
+    }
+    // Only the limited amount was consumed from the caller's stream and reader.
+    assertThat(in.available()).isEqualTo(90);
+    assertThat((char) reader.read()).isEqualTo('e');
   }
 }

@@ -72,6 +72,28 @@ public final class FanOut implements AutoCloseable {
    */
   public <D, T extends @Nullable Object> List<T> parallel(List<D> delegates, Call<D, T> call)
       throws SQLException {
+    return parallel(delegates, call, () -> {});
+  }
+
+  /**
+   * Runs the call on every delegate concurrently and waits for all of them.
+   *
+   * <p>If the waiting thread is interrupted, {@code onInterrupt} runs first, so the caller can ask
+   * the backends to stop what they are doing (for example with {@code Statement.cancel}), then the
+   * outstanding tasks are cancelled and the interrupt flag is restored. Exceptions from {@code
+   * onInterrupt} are ignored. If any backend fails, results of the healthy backends that are {@link
+   * AutoCloseable} are closed before the failure is thrown.
+   *
+   * @param delegates one delegate per backend, in URL order
+   * @param call the operation
+   * @param onInterrupt runs when the waiting thread is interrupted
+   * @param <D> delegate type
+   * @param <T> result type
+   * @return results in URL order
+   * @throws SQLException if any backend failed
+   */
+  public <D, T extends @Nullable Object> List<T> parallel(
+      List<D> delegates, Call<D, T> call, Runnable onInterrupt) throws SQLException {
     if (delegates.size() == 1) {
       return sequential(delegates, call);
     }
@@ -110,12 +132,17 @@ public final class FanOut implements AutoCloseable {
         throw closedException();
       } catch (InterruptedException e) {
         Thread.currentThread().interrupt();
+        try {
+          onInterrupt.run();
+        } catch (RuntimeException ignored) {
+          // Best effort; the interrupt itself is what gets reported.
+        }
         cancelAll(futures);
         throw new ManyfoldException(
             "Interrupted while waiting for backend '" + names.get(i) + "'", "HY008", e);
       }
     }
-    throwIfAnyFailed(failures);
+    throwIfAnyFailed(failures, results);
     return results;
   }
 
@@ -143,11 +170,12 @@ public final class FanOut implements AutoCloseable {
         failures.add(t);
       }
     }
-    throwIfAnyFailed(failures);
+    throwIfAnyFailed(failures, results);
     return results;
   }
 
-  private void throwIfAnyFailed(List<@Nullable Throwable> failures) throws SQLException {
+  private <T extends @Nullable Object> void throwIfAnyFailed(
+      List<@Nullable Throwable> failures, List<T> results) throws SQLException {
     SQLException first = null;
     SQLException last = null;
     for (int i = 0; i < failures.size(); i++) {
@@ -167,7 +195,26 @@ public final class FanOut implements AutoCloseable {
       last = wrapped;
     }
     if (first != null) {
+      closeHealthyResults(failures, results, first);
       throw first;
+    }
+  }
+
+  /**
+   * Closes the results of backends that succeeded when another one failed, so cursors and other
+   * resources are not left open. Failures to close are attached to the thrown exception as
+   * suppressed exceptions.
+   */
+  private static <T extends @Nullable Object> void closeHealthyResults(
+      List<@Nullable Throwable> failures, List<T> results, SQLException thrown) {
+    for (int i = 0; i < failures.size() && i < results.size(); i++) {
+      if (failures.get(i) == null && results.get(i) instanceof AutoCloseable closeable) {
+        try {
+          closeable.close();
+        } catch (Exception e) {
+          thrown.addSuppressed(e);
+        }
+      }
     }
   }
 
