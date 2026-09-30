@@ -118,10 +118,13 @@ public final class Directives {
   public static BackendSql plan(String sql, List<String> names) throws ManyfoldException {
     Parsed parsed = parse(sql, names);
     List<String> texts = new ArrayList<>(names.size());
+    List<Boolean> substituted = new ArrayList<>(names.size());
     for (Map<String, String> map : parsed.substitutions()) {
-      texts.add(new SchemaRewriter(map).apply(parsed.sql()));
+      String text = new SchemaRewriter(map).apply(parsed.sql());
+      texts.add(text);
+      substituted.add(!map.isEmpty() && !text.equals(parsed.sql()));
     }
-    return new BackendSql(sql, texts);
+    return new BackendSql(sql, texts, substituted);
   }
 
   /** The trimmed text inside a comment. */

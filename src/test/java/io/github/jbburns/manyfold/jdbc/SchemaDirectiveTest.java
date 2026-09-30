@@ -257,6 +257,28 @@ class SchemaDirectiveTest {
   }
 
   @Test
+  void aBackendWithoutASubstitutionGetsNoSentSuffixEvenWhenAnotherBackendHasOne() throws Exception {
+    try (Connection conn = open("");
+        Statement s = conn.createStatement()) {
+      // Only dev has a substitution, so only dev's failure shows what it was sent.
+      assertThatThrownBy(
+              () ->
+                  s.executeQuery(
+                      lines(
+                          "-- manyfold dev: zone1_prod=zone1_missing",
+                          "SELECT * FROM zone1_prod.nosuch")))
+          .isInstanceOf(SQLException.class)
+          .hasMessageStartingWith("Backend 'prod' failed: ")
+          .satisfies(e -> assertThat(e.getMessage()).doesNotContain("sent:"))
+          .satisfies(
+              e ->
+                  assertThat(((SQLException) e).getNextException().getMessage())
+                      .startsWith("Backend 'dev' failed: ")
+                      .contains("; sent: SELECT * FROM zone1_missing.nosuch"));
+    }
+  }
+
+  @Test
   void aFailureOfAPreparedStatementNamesTheRewrittenText() throws Exception {
     try (Connection conn = open("")) {
       assertThatThrownBy(

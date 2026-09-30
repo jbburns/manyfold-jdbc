@@ -54,7 +54,7 @@ and `h2-2.5.252.jar` (the backend). Then, in SQuirreL SQL:
    name and password empty.
 
 ```
-jdbc:manyfold:prod=jdbc:h2:mem:prod;DB_CLOSE_DELAY=-1;INIT=CREATE TABLE IF NOT EXISTS orders AS SELECT * FROM (VALUES (1, 'alice', 10.50), (2, 'bob', 20.00)) AS t(id, customer, amount) || dev=jdbc:h2:mem:dev;DB_CLOSE_DELAY=-1;INIT=CREATE TABLE IF NOT EXISTS orders AS SELECT * FROM (VALUES (3, 'carol', 30.25)) AS t(id, customer, amount)
+jdbc:manyfold:prod=jdbc:h2:mem:prod;DB_CLOSE_DELAY=-1;INIT=CREATE TABLE IF NOT EXISTS orders AS SELECT * FROM (VALUES (1, 'alice', 10.50), (2, 'bob', 20.00)) AS t(id, customer, amount)\;CREATE SCHEMA IF NOT EXISTS zone1_prod\;CREATE TABLE IF NOT EXISTS zone1_prod.orders AS SELECT * FROM (VALUES (1, 'alice', 10.50), (2, 'bob', 20.00)) AS t(id, customer, amount) || dev=jdbc:h2:mem:dev;DB_CLOSE_DELAY=-1;INIT=CREATE TABLE IF NOT EXISTS orders AS SELECT * FROM (VALUES (3, 'carol', 30.25)) AS t(id, customer, amount)\;CREATE SCHEMA IF NOT EXISTS zone1_dev2\;CREATE TABLE IF NOT EXISTS zone1_dev2.orders AS SELECT * FROM (VALUES (3, 'carol', 30.25)) AS t(id, customer, amount)
 ```
 
 3. Connect and run these three statements, one at a time:
@@ -68,6 +68,10 @@ jdbc:manyfold:prod=jdbc:h2:mem:prod;DB_CLOSE_DELAY=-1;INIT=CREATE TABLE IF NOT E
 `source_database` is added by the driver, so it is not a column of `orders` and you cannot
 filter or group by it in your SQL. Each backend answers the count for itself, which is why you
 get one row per backend.
+
+The URL also creates schema `zone1_prod` on `prod` and schema `zone1_dev2` on `dev`, each with an
+`orders` table, for the example in [Different schema per backend](#different-schema-per-backend).
+Each `\;` is an H2 separator between `INIT` statements, not the end of the URL.
 
 The in-memory databases live only while SQuirreL is running. H2 keeps them per driver
 definition, so a second alias on the same driver definition sees the same data, and restarting
@@ -144,6 +148,8 @@ to substitute for each backend:
 select * from zone1_prod.orders o join zone2_prod.customers c on c.id = o.customer_id
 ```
 
+![SQuirreL SQL running a statement with a manyfold directive comment: rows come from zone1_prod on prod and from zone1_dev2 on dev](docs/images/schema-directive.png)
+
 `prod` receives the statement as written, `dev2` receives `zone1_dev2.orders` and
 `zone2_dev2.customers`. A backend without a directive gets the statement unchanged. The block form
 `/* manyfold dev2: zone1_prod=zone1_dev2 */` works too, and there may be one directive per backend,
@@ -184,8 +190,13 @@ Rules:
 - **Read-only still applies.** The read-only check runs on the text as you wrote it, before any
   substitution.
 - **Prepared statements** are rewritten once, when they are prepared.
+- **The client must not strip comments.** SQuirreL SQL removes `--` and `/* */` comments before
+  it sends a statement, by default, so the driver never sees the directive. Untick *Remove multi
+  line comment* and *Remove line comment* under **Session > Session Properties > SQL**. Any
+  other client that removes comments has to be told not to.
 
-When a backend fails and its text was changed, the message ends with the statement it was sent:
+When a backend fails and a substitution was applied to its text, the message ends with the
+statement it was sent:
 `Backend 'dev2' failed: Schema "ZONE1_DEV2" not found; sent: select * from zone1_dev2.orders`.
 
 ## Setting up a SQL client
@@ -215,6 +226,9 @@ io.github.jbburns.manyfold.jdbc.ManyfoldDriver
    properties** tab, tick *Use driver properties*, and set `manyfold.<name>.user` and
    `manyfold.<name>.password`. The names come from your URL.
 7. Connect. Run a query; the first column of every result is `source_database`.
+8. To use [schema directives](#different-schema-per-backend), open **Session > Session
+   Properties > SQL** and untick *Remove multi line comment* and *Remove line comment*.
+   SQuirreL strips comments by default, and a directive is a comment.
 
 The object tree and autocomplete are populated from the first backend in the URL.
 

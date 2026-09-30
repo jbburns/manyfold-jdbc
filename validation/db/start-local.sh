@@ -10,7 +10,9 @@
 #   1. Installs mariadb-server and postgresql with apt-get, if missing (needs root).
 #   2. Starts both servers, with `service` if it works, otherwise by starting the daemons
 #      directly as their service users.
-#   3. Creates database `demo` and user `demo` / password `demo` on each, allows password login
+#   3. Creates database `demo` and user `demo` / password `demo` on each (on MariaDB also the
+#      database `zone1_dev2`, and PostgreSQL gets schema `zone1_prod` from its seed, for the
+#      schema-directive step of the harness), allows password login
 #      from 127.0.0.1, and loads db/mariadb-init.sql and db/postgres-init.sql.
 #   4. Prints the rows of each table.
 #
@@ -87,11 +89,14 @@ log "PostgreSQL $PG_VERSION is up"
 # ---- 3a. MariaDB: database, user, seed --------------------------------------------------------
 mariadb --protocol=socket <<'SQL'
 CREATE DATABASE IF NOT EXISTS demo;
+CREATE DATABASE IF NOT EXISTS zone1_dev2;
 DROP USER IF EXISTS 'demo'@'%';
 CREATE USER IF NOT EXISTS 'demo'@'127.0.0.1' IDENTIFIED BY 'demo';
 CREATE USER IF NOT EXISTS 'demo'@'localhost' IDENTIFIED BY 'demo';
 GRANT ALL ON demo.* TO 'demo'@'127.0.0.1';
 GRANT ALL ON demo.* TO 'demo'@'localhost';
+GRANT ALL ON zone1_dev2.* TO 'demo'@'127.0.0.1';
+GRANT ALL ON zone1_dev2.* TO 'demo'@'localhost';
 FLUSH PRIVILEGES;
 SQL
 mariadb --protocol=socket demo <"$SCRIPT_DIR/mariadb-init.sql"
@@ -123,6 +128,10 @@ PGOPTIONS="-c client_min_messages=warning" PGPASSWORD=demo psql -X -q -v ON_ERRO
 # ---- 4. confirm -------------------------------------------------------------------------------
 log "MariaDB demo.orders over TCP as demo/demo:"
 mariadb -h 127.0.0.1 -P 3306 -udemo -pdemo demo -e 'SELECT * FROM orders ORDER BY id'
+log "MariaDB zone1_dev2.orders over TCP as demo/demo:"
+mariadb -h 127.0.0.1 -P 3306 -udemo -pdemo zone1_dev2 -e 'SELECT * FROM orders ORDER BY id'
 log "PostgreSQL demo.orders over TCP as demo/demo:"
 PGPASSWORD=demo psql -X -h 127.0.0.1 -p 5432 -U demo -d demo -c 'SELECT * FROM orders ORDER BY id'
+log "PostgreSQL demo.zone1_prod.orders over TCP as demo/demo:"
+PGPASSWORD=demo psql -X -h 127.0.0.1 -p 5432 -U demo -d demo -c 'SELECT * FROM zone1_prod.orders ORDER BY id'
 log "ready: MariaDB on 3306, PostgreSQL on 5432, user demo, password demo"
