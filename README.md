@@ -4,6 +4,8 @@ A pass-through JDBC driver that runs one SQL statement against several databases
 the rows as a single result set, with a `source_database` column telling you where each row
 came from.
 
+![SQuirreL SQL showing one SELECT returning rows from prod and dev with a source_database column](docs/images/squirrel-prod-dev.png)
+
 > **Status:** pre-release. The driver works and is tested against H2 and SQLite backends, but
 > nothing has been published to Maven Central yet. Until then, build the jar with
 > `./gradlew jar` and pick it up from `build/libs/`.
@@ -71,6 +73,46 @@ SQuirreL starts from scratch. The `IF NOT EXISTS` in the URL keeps a reconnect f
 rows twice.
 
 To try fan-out writes, insert `readOnly=false;` right after `jdbc:manyfold:` in the same URL.
+
+## One SQL, three databases
+
+The same driver fans out to different database products. This URL names a PostgreSQL, a MariaDB
+and an H2 backend. It must be on one line. Use user name `demo` and password `demo`; H2 accepts
+any user for a fresh in-memory database.
+
+```
+jdbc:manyfold:postgres=jdbc:postgresql://localhost:5432/demo || mariadb=jdbc:mariadb://localhost:3306/demo || h2=jdbc:h2:mem:demo;DB_CLOSE_DELAY=-1;INIT=CREATE TABLE IF NOT EXISTS orders AS SELECT * FROM (VALUES (1, 'alice', 10.50), (2, 'bob', 20.00)) AS t(id, customer, amount)
+```
+
+The PostgreSQL and MariaDB servers each hold a table `orders(id, customer, amount)` with their
+own rows. The repository ships a Docker Compose file that starts both and seeds them from
+[validation/db/](validation/db/). Run the whole GUI check against them, in one command:
+
+```
+docker compose -f validation/docker-compose.yml up --abort-on-container-exit squirrel
+```
+
+Or in two steps, starting the servers first and running the check from your own machine:
+
+```
+docker compose -f validation/docker-compose.yml up -d --wait mariadb postgres
+MODE=multi validation/run.sh
+```
+
+`SELECT * FROM orders ORDER BY id` then returns five rows, in URL order and not sorted across
+backends, because every backend sorts its own rows:
+
+| source_database | id | customer | amount |
+|---|---|---|---|
+| postgres | 20 | postgres | 200.00 |
+| mariadb | 10 | maria | 100.00 |
+| mariadb | 11 | db | 110.00 |
+| h2 | 1 | alice | 10.50 |
+| h2 | 2 | bob | 20.00 |
+
+The vendor JDBC jars are downloaded by `validation/run.sh` with pinned checksums rather than
+declared in Gradle, because the MariaDB driver is LGPL-2.1, this project's dependency review
+denies that license, and manyfold-jdbc itself has no dependency on either driver.
 
 ## URL syntax
 
@@ -181,6 +223,9 @@ without a `Class.forName` call.
 ./gradlew jar          # just the driver jar, in build/libs/
 ```
 
+[DEVELOPING.md](DEVELOPING.md) covers the whole developer workflow: tests, formatting, static
+analysis, dependency updates and the publishing dry run.
+
 Releases are described in [RELEASING.md](RELEASING.md).
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and
@@ -189,8 +234,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and
 ## GUI validation
 
 An on-demand script launches SQuirreL SQL with the driver and two H2 databases, runs the three
-statements from "Try it in five minutes" through the real GUI, and saves screenshots. It is not
-part of CI; see [validation/README.md](validation/README.md).
+statements from "Try it in five minutes" through the real GUI, and saves screenshots. With
+`MODE=multi` it does the same against PostgreSQL, MariaDB and H2 together. It is not part of CI;
+see [validation/README.md](validation/README.md) and [DEVELOPING.md](DEVELOPING.md).
 
 ## Maintenance status
 

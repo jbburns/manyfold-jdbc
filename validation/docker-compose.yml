@@ -1,0 +1,67 @@
+# Real backends for the GUI validation harness, plus the harness itself. NOT part of CI.
+# See DEVELOPING.md, section "The GUI validation harness".
+#
+#   docker compose -f validation/docker-compose.yml up --abort-on-container-exit squirrel
+#     starts mariadb and postgres, waits until both are healthy, runs the harness in multi
+#     mode, and writes screenshots and RESULT.txt to validation/out/.
+#
+#   docker compose -f validation/docker-compose.yml up -d --wait mariadb postgres
+#     starts only the databases, on localhost:3306 and localhost:5432, for MODE=multi
+#     validation/run.sh on the host.
+#
+# All credentials here are throwaway values for a local demo. Do not reuse them anywhere.
+name: manyfold-validation
+
+services:
+  mariadb:
+    image: mariadb:11
+    environment:
+      MARIADB_DATABASE: demo
+      MARIADB_USER: demo
+      MARIADB_PASSWORD: demo
+      MARIADB_ROOT_PASSWORD: root
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./db/mariadb-init.sql:/docker-entrypoint-initdb.d/mariadb-init.sql:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+      start_period: 5s
+
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: demo
+      POSTGRES_USER: demo
+      POSTGRES_PASSWORD: demo
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./db/postgres-init.sql:/docker-entrypoint-initdb.d/postgres-init.sql:ro
+    healthcheck:
+      # -h 127.0.0.1 makes the check use TCP. The temporary server that runs the init scripts
+      # listens on the Unix socket only, so the container turns healthy after seeding.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U demo -d demo"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+      start_period: 5s
+
+  squirrel:
+    build:
+      context: ..
+      dockerfile: validation/Dockerfile
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      MODE: multi
+      DB_HOST_MARIADB: mariadb
+      DB_HOST_POSTGRES: postgres
+    volumes:
+      - ./out:/out

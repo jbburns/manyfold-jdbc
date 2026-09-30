@@ -31,6 +31,9 @@ provided in section 5 of that license. There is no separate contributor agreemen
 
 Gradle downloads a Java 17 runtime for the `test17` task if none is installed.
 
+See [DEVELOPING.md](DEVELOPING.md) for the full developer guide, including the GUI validation
+harness.
+
 ## Updating dependencies
 
 Dependency checksums are pinned in `gradle/verification-metadata.xml`. After changing a version

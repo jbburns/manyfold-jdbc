@@ -9,9 +9,19 @@
 #      to two H2 in-memory databases, using the URL from the README "Try it in five minutes".
 #   4. Starts Xvfb, launches SQuirreL, drives the real GUI with xdotool, and saves screenshots.
 #
+# Two modes, chosen with the MODE environment variable:
+#   MODE=h2     (default) two H2 in-memory databases. Needs no server.
+#   MODE=multi  PostgreSQL, MariaDB and H2 behind one URL. Downloads the two vendor JDBC jars
+#               (pinned below), waits for both servers to accept TCP connections, and names
+#               its screenshots multi-NN-<label>.png. Start the servers first, with
+#               `docker compose -f validation/docker-compose.yml up -d mariadb postgres` or
+#               with validation/db/start-local.sh. See DEVELOPING.md.
+#
 # Usage:
-#   validation/run.sh                 full run
-#   validation/run.sh --install-only  download and install SQuirreL, then exit (used by Dockerfile)
+#   validation/run.sh                 full run, h2 mode
+#   MODE=multi validation/run.sh      full run, three real backends
+#   validation/run.sh --install-only  download SQuirreL and the vendor jars, then exit
+#                                     (used by the Dockerfile)
 #
 # Needs: JDK 17+, Xvfb, xdotool, curl, and ImageMagick (import/convert) or scrot. Fonts: DejaVu.
 #
@@ -21,6 +31,8 @@
 #   SQUIRREL_HOME use an existing SQuirreL install instead of installing
 #   BUNDLE_DIR    directory holding manyfold-jdbc-*.jar and h2-*.jar      (build/client)
 #   SKIP_BUILD=1  never run Gradle; fail if BUNDLE_DIR lacks the jars
+#   MODE          h2 (default) or multi
+#   DB_HOST_POSTGRES, DB_HOST_MARIADB   host names for multi mode            (localhost)
 #
 # PASS criteria. They are deliberately simple and only catch gross failures. The screenshots
 # are the real evidence; open them.
@@ -40,6 +52,18 @@ set -euo pipefail
 SQUIRREL_VERSION=5.1.0
 SQUIRREL_SHA256=a6ad409375aea36db5e158f6f5d1d7ae7c6ba0d1fecea98225e217e1ab123184
 SQUIRREL_URL="https://github.com/squirrel-sql-client/squirrel-sql-stable-releases/releases/download/${SQUIRREL_VERSION}-installer/squirrel-sql-${SQUIRREL_VERSION}-standard.jar"
+
+# ---- pinned vendor JDBC drivers, downloaded for MODE=multi ------------------------------------
+# Downloaded rather than declared in Gradle: the MariaDB driver is LGPL-2.1, which the dependency
+# review job denies, and the driver itself never depends on either jar. The checksums were
+# computed on a fresh download and match the .sha256 (MariaDB) and .sha1 (PostgreSQL) files that
+# Maven Central publishes next to each jar.
+MARIADB_VERSION=3.5.10
+MARIADB_SHA256=919b8c1c771d9ee3465811462f242c9543ab401e140c64988ddbf1d8abcb18b2
+MARIADB_URL="https://repo1.maven.org/maven2/org/mariadb/jdbc/mariadb-java-client/${MARIADB_VERSION}/mariadb-java-client-${MARIADB_VERSION}.jar"
+POSTGRESQL_VERSION=42.7.13
+POSTGRESQL_SHA256=6e0e4cc2d8cae902084f8a2b18728b073a6fd9d1f87c9d8bff8f298c18185b93
+POSTGRESQL_URL="https://repo1.maven.org/maven2/org/postgresql/postgresql/${POSTGRESQL_VERSION}/postgresql-${POSTGRESQL_VERSION}.jar"
 # ------------------------------------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -48,7 +72,15 @@ OUT_DIR="${OUT_DIR:-$SCRIPT_DIR/out}"
 CACHE_DIR="${CACHE_DIR:-$SCRIPT_DIR/.cache}"
 BUNDLE_DIR="${BUNDLE_DIR:-$REPO_ROOT/build/client}"
 SQUIRREL_HOME="${SQUIRREL_HOME:-$CACHE_DIR/squirrel-sql-$SQUIRREL_VERSION}"
-ALIAS_NAME="manyfold-h2-demo"
+MODE="${MODE:-h2}"
+case "$MODE" in
+  h2) ALIAS_NAME="manyfold-h2-demo"; SHOT_PREFIX="" ;;
+  multi) ALIAS_NAME="manyfold-multi-demo"; SHOT_PREFIX="multi-" ;;
+  *) printf '[validation] ERROR: MODE must be h2 or multi, got "%s"\n' "$MODE" >&2; exit 2 ;;
+esac
+DB_HOST_POSTGRES="${DB_HOST_POSTGRES:-localhost}"
+DB_HOST_MARIADB="${DB_HOST_MARIADB:-localhost}"
+DRIVERS_DIR="$CACHE_DIR/drivers"
 SCREEN_W=1600
 SCREEN_H=1000
 
@@ -112,8 +144,27 @@ install_squirrel() {
   [ -x "$SQUIRREL_HOME/squirrel-sql.sh" ] || die "installer did not create squirrel-sql.sh"
 }
 
+# download_driver URL SHA256: fetches into DRIVERS_DIR once, verifies every time, prints the path.
+download_driver() {
+  need curl
+  need sha256sum
+  mkdir -p "$DRIVERS_DIR"
+  local jar="$DRIVERS_DIR/$(basename "$1")"
+  if [ ! -f "$jar" ]; then
+    log "downloading $1" >&2
+    curl -fsSL --retry 3 -o "$jar.part" "$1" || die "could not download $1"
+    mv "$jar.part" "$jar"
+  fi
+  local actual
+  actual="$(sha256sum "$jar" | cut -d' ' -f1)"
+  [ "$actual" = "$2" ] || die "checksum mismatch for $jar: expected $2, got $actual"
+  printf '%s\n' "$jar"
+}
+
 if [ "${1:-}" = "--install-only" ]; then
   install_squirrel
+  download_driver "$MARIADB_URL" "$MARIADB_SHA256" >/dev/null
+  download_driver "$POSTGRESQL_URL" "$POSTGRESQL_SHA256" >/dev/null
   exit 0
 fi
 
@@ -163,10 +214,46 @@ log "backend jar: $H2_JAR"
 
 install_squirrel
 
+EXTRA_JARS=()
+ALIAS_USER=""
+ALIAS_PASSWORD=""
+if [ "$MODE" = multi ]; then
+  EXTRA_JARS+=("$(download_driver "$POSTGRESQL_URL" "$POSTGRESQL_SHA256")")
+  EXTRA_JARS+=("$(download_driver "$MARIADB_URL" "$MARIADB_SHA256")")
+  ALIAS_USER=demo
+  ALIAS_PASSWORD=demo
+fi
+
 # ---- the exact URL from the README ------------------------------------------------------------
-ALIAS_URL="$(grep -E '^jdbc:manyfold:prod=jdbc:h2:mem:prod' "$REPO_ROOT/README.md" || true)"
-[ "$(printf '%s\n' "$ALIAS_URL" | wc -l)" -eq 1 ] && [ -n "$ALIAS_URL" ] \
-  || die "expected exactly one 'jdbc:manyfold:prod=jdbc:h2:mem:prod...' line in README.md"
+# h2 mode uses the URL of "Try it in five minutes". multi mode uses the one in "One SQL, three
+# databases", with the two host names swapped in (the README shows localhost).
+if [ "$MODE" = multi ]; then
+  ALIAS_URL="$(grep -E '^jdbc:manyfold:postgres=jdbc:postgresql://localhost:5432/demo' "$REPO_ROOT/README.md" || true)"
+  [ "$(printf '%s\n' "$ALIAS_URL" | wc -l)" -eq 1 ] && [ -n "$ALIAS_URL" ] \
+    || die "expected exactly one 'jdbc:manyfold:postgres=jdbc:postgresql://localhost:5432/demo...' line in README.md"
+  ALIAS_URL="${ALIAS_URL//\/\/localhost:5432\//\/\/$DB_HOST_POSTGRES:5432\/}"
+  ALIAS_URL="${ALIAS_URL//\/\/localhost:3306\//\/\/$DB_HOST_MARIADB:3306\/}"
+else
+  ALIAS_URL="$(grep -E '^jdbc:manyfold:prod=jdbc:h2:mem:prod' "$REPO_ROOT/README.md" || true)"
+  [ "$(printf '%s\n' "$ALIAS_URL" | wc -l)" -eq 1 ] && [ -n "$ALIAS_URL" ] \
+    || die "expected exactly one 'jdbc:manyfold:prod=jdbc:h2:mem:prod...' line in README.md"
+fi
+
+# ---- multi mode: both servers must be reachable before SQuirreL starts ------------------------
+wait_for_tcp() { # wait_for_tcp NAME HOST PORT
+  for _ in $(seq 1 60); do
+    if timeout 2 bash -c "exec 3<>/dev/tcp/$2/$3" 2>/dev/null; then
+      log "$1 accepts connections on $2:$3"
+      return 0
+    fi
+    sleep 1
+  done
+  die "$1 did not accept TCP connections on $2:$3 within 60 s. Start it with 'docker compose -f validation/docker-compose.yml up -d mariadb postgres' or validation/db/start-local.sh"
+}
+if [ "$MODE" = multi ]; then
+  wait_for_tcp PostgreSQL "$DB_HOST_POSTGRES" 5432
+  wait_for_tcp MariaDB "$DB_HOST_MARIADB" 3306
+fi
 
 # ---- SQuirreL settings: driver, alias, no first-run help window -------------------------------
 WORK_DIR="$(mktemp -d)"
@@ -200,6 +287,12 @@ cat >"$USERDIR/SQLDrivers.xml" <<EOF
             <Bean Class="net.sourceforge.squirrel_sql.fw.util.beanwrapper.StringWrapper">
                 <string>$(printf '%s' "$H2_JAR" | xml_escape)</string>
             </Bean>
+$(for jar in "${EXTRA_JARS[@]:-}"; do
+  [ -n "$jar" ] || continue
+  printf '            <Bean Class="net.sourceforge.squirrel_sql.fw.util.beanwrapper.StringWrapper">\n'
+  printf '                <string>%s</string>\n' "$(printf '%s' "$jar" | xml_escape)"
+  printf '            </Bean>\n'
+done)
         </jarFileNames>
         <name>manyfold</name>
         <url>jdbc:manyfold:[option=value;...][name=]jdbc:vendor://... || [name=]jdbc:vendor://...</url>
@@ -221,9 +314,9 @@ cat >"$USERDIR/SQLAliases23.xml" <<EOF
             <string>manyfold-validation-alias</string>
         </identifier>
         <name>$ALIAS_NAME</name>
-        <password></password>
+        <password>$(printf '%s' "$ALIAS_PASSWORD" | xml_escape)</password>
         <url>$(printf '%s' "$ALIAS_URL" | xml_escape)</url>
-        <userName></userName>
+        <userName>$(printf '%s' "$ALIAS_USER" | xml_escape)</userName>
     </Bean>
 </Beans>
 EOF
@@ -260,7 +353,7 @@ shot_raw() {
 shot() {
   SHOT_N=$((SHOT_N + 1))
   local file
-  file="$(printf '%02d-%s.png' "$SHOT_N" "$1")"
+  file="$(printf '%s%02d-%s.png' "$SHOT_PREFIX" "$SHOT_N" "$1")"
   shot_raw "$OUT_DIR/$file"
   SHOTS+=("$file")
   SHOT_NOTES+=("$2")
@@ -358,15 +451,27 @@ else
 fi
 error_window_exists && fail "an Error window is open right after connecting"
 
-shot connected "Objects tab right after auto-connect: session tab manyfold-h2-demo (PROD) is open, no dialog"
+shot connected "Objects tab right after auto-connect: session tab $ALIAS_NAME is open, no dialog"
 
 # Object tree: expand PROD > PUBLIC > TABLE so ORDERS is visible. Keyboard navigation of the tree.
-click 110 186
-sleep 0.5
-xdotool key Right Down Down Right
-sleep 1.5
-xdotool key Down Right
-sleep 2
+if [ "$MODE" = multi ]; then
+  # The first backend is PostgreSQL, whose tree is manyfold-multi-demo > information_schema,
+  # pg_catalog, public > table types. Select the `public` schema row, open it, then walk down
+  # to its TABLE node (the ninth type) and open that.
+  click 110 216
+  sleep 0.5
+  xdotool key Right
+  sleep 1.5
+  xdotool key Down Down Down Down Down Down Down Down Down Right
+  sleep 2
+else
+  click 110 186
+  sleep 0.5
+  xdotool key Right Down Down Right
+  sleep 1.5
+  xdotool key Down Right
+  sleep 2
+fi
 shot objects-tree "Objects tab with the tree expanded down to the tables (comes from the first backend)"
 
 # Switch to the SQL tab (mouse; keeps working without a window manager), and give the editor
@@ -378,11 +483,25 @@ sleep 1
 
 type_and_run "SELECT * FROM orders ORDER BY id"
 widen_first_column
-shot select-all "SELECT * FROM orders ORDER BY id: grid with source_database prod, prod, dev"
+if [ "$MODE" = multi ]; then
+  shot select-all "SELECT * FROM orders ORDER BY id: source_database first, then postgres 20, mariadb 10 and 11, h2 1 and 2"
+else
+  shot select-all "SELECT * FROM orders ORDER BY id: grid with source_database prod, prod, dev"
+fi
 
 type_and_run "SELECT count(*) FROM orders"
 widen_first_column
-shot count "SELECT count(*) FROM orders: one row per backend, 2 from prod and 1 from dev"
+if [ "$MODE" = multi ]; then
+  shot count "SELECT count(*) FROM orders: one row per backend, 1 from postgres, 2 from mariadb, 2 from h2"
+else
+  shot count "SELECT count(*) FROM orders: one row per backend, 2 from prod and 1 from dev"
+fi
+
+if [ "$MODE" = multi ]; then
+  type_and_run "SELECT customer, amount FROM orders WHERE amount > 15 ORDER BY amount"
+  widen_first_column
+  shot filtered "SELECT customer, amount ... WHERE amount > 15: postgres 200, mariadb 100 and 110, h2 bob 20.00 only"
+fi
 
 error_window_exists && fail "an Error window is open after the SELECT statements"
 errors_after_selects="$(log_error_count)"
@@ -396,10 +515,14 @@ else
   NOTES+=("DELETE: no Error window; refusal is shown in the results pane (informational)")
 fi
 
-# Nothing must have been deleted: the count is still 2 from prod and 1 from dev.
+# Nothing must have been deleted: the counts are unchanged.
 type_and_run "SELECT count(*) FROM orders"
 widen_first_column
-shot count-after-delete "SELECT count(*) again: still 2 from prod and 1 from dev, so the refused DELETE removed nothing"
+if [ "$MODE" = multi ]; then
+  shot count-after-delete "SELECT count(*) again: still 1, 2 and 2, so the refused DELETE removed nothing"
+else
+  shot count-after-delete "SELECT count(*) again: still 2 from prod and 1 from dev, so the refused DELETE removed nothing"
+fi
 
 # ---- final checks -----------------------------------------------------------------------------
 kill -0 "$SQUIRREL_PID" 2>/dev/null || fail "SQuirreL exited during the run"
@@ -417,7 +540,9 @@ done
 if [ "${#FAILURES[@]}" -eq 0 ]; then VERDICT=PASS; else VERDICT=FAIL; fi
 {
   echo "$VERDICT"
+  echo "mode: $MODE"
   echo "SQuirreL SQL $SQUIRREL_VERSION, manyfold jar $(basename "$MANYFOLD_JAR"), backend $(basename "$H2_JAR")"
+  for j in "${EXTRA_JARS[@]:-}"; do [ -n "$j" ] && echo "backend jar: $(basename "$j")"; done
   for n in "${NOTES[@]}"; do echo "check: $n"; done
   for f in "${FAILURES[@]:-}"; do [ -n "$f" ] && echo "FAILED: $f"; done
   for i in "${!SHOTS[@]}"; do echo "${SHOTS[$i]}: ${SHOT_NOTES[$i]}"; done
