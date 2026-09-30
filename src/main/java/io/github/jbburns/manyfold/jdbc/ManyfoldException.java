@@ -41,6 +41,9 @@ public class ManyfoldException extends SQLException {
   /** SQL state for a statement refused because the connection is read-only. */
   public static final String STATE_READ_ONLY = "25006";
 
+  /** SQL state for a schema directive or substitution that is refused. */
+  public static final String STATE_SYNTAX_ERROR = "42000";
+
   /** SQL state for a feature the merged result set does not support. */
   public static final String STATE_FEATURE_NOT_SUPPORTED = "0A000";
 
@@ -113,10 +116,28 @@ public class ManyfoldException extends SQLException {
    * @return the wrapped exception
    */
   public static SQLException backendFailed(String sourceName, Throwable cause) {
+    return backendFailed(sourceName, cause, null);
+  }
+
+  /**
+   * Wraps a failure from one backend, and shows the statement that backend was sent when it is not
+   * the text the caller supplied. See {@link #backendFailed(String, Throwable)}.
+   *
+   * @param sourceName logical name of the backend
+   * @param cause what the backend threw
+   * @param sentSql the statement text that was sent to this backend if it differs from the
+   *     caller's, appended to the message as {@code "; sent: <text>"}, or null
+   * @return the wrapped exception
+   */
+  public static SQLException backendFailed(
+      String sourceName, Throwable cause, @Nullable String sentSql) {
     // Some drivers echo the connection string, password included, in a connect error.
     String detail =
         cause.getMessage() != null ? Redact.url(cause.getMessage()) : cause.getClass().getName();
     String message = "Backend '" + sourceName + "' failed: " + detail;
+    if (sentSql != null) {
+      message += "; sent: " + Redact.url(sentSql);
+    }
     if (!(cause instanceof SQLException vendor)) {
       return new ManyfoldException(message, null, cause);
     }

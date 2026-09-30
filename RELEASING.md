@@ -23,19 +23,30 @@ Everything below is done once. None of it goes into the repository.
 Maven Central requires PGP signatures. Sigstore is accepted only in addition, not instead.
 
 ```
-gpg --full-generate-key            # RSA 4096, your name, the email on your GitHub account
+gpg --full-generate-key
+#   RSA and RSA, 4096 bits, expires in 2y, your name, your GitHub noreply address, a passphrase
 gpg --list-secret-keys --keyid-format long
-#   sec   rsa4096/ABCDEF1234567890 ...   <- the 16 hex characters are the key id
-gpg --keyserver keyserver.ubuntu.com --send-keys ABCDEF1234567890
-gpg --armor --export-secret-keys ABCDEF1234567890 > /tmp/signing-key.asc
+#   sec   rsa4096/3F2A9B1C7D8E4F50 2026-09-30 [SC] [expires: 2028-09-30]
+#   the 16 characters after the slash are YOUR key id; the value above is only an example
+gpg --keyserver keyserver.ubuntu.com --send-keys 3F2A9B1C7D8E4F50
+gpg --armor --export-secret-keys 3F2A9B1C7D8E4F50 > /tmp/signing-key.asc
+gpg --gen-revoke 3F2A9B1C7D8E4F50 > /tmp/signing-key-revoke.asc
 ```
 
+- The email on the key can be your GitHub noreply address, such as
+  `9023993+jbburns@users.noreply.github.com`. Central never checks it, and it keeps your real
+  address out of the public key metadata. Use `keyserver.ubuntu.com`, which publishes without
+  emailing you; `keys.openpgp.org` would try to verify the address first.
 - `SIGNING_KEY` is the entire contents of `signing-key.asc`, including the BEGIN and END lines.
-- `SIGNING_KEY_ID` is the **last 8** characters of the key id, `34567890` in the example.
+- `SIGNING_KEY_ID` is the **last 8** characters of the key id, `7D8E4F50` in the example.
 - `SIGNING_PASSWORD` is the passphrase you chose.
 
-Delete `/tmp/signing-key.asc` after uploading it. Keys expire after two years by default; put a
-reminder in your calendar, because an expired key makes every release fail at the signing step.
+Store the passphrase, the exported key and the revocation certificate together in a password
+manager, then delete the two files from `/tmp`. GitHub secrets cannot be read back, so that
+entry is your only copy. If the passphrase is lost the key is unusable: releases stop at the
+signing step until you generate a new key and replace the three signing secrets. Nothing already
+published is affected. Keys expire after two years by default; put a reminder in your calendar,
+because an expired key also fails every release at the signing step.
 
 ### 3. GitHub environment and secrets
 
@@ -55,12 +66,16 @@ reminder in your calendar, because an expired key makes every release fail at th
 - *Settings → Branches*: protect `main`, require the `Build and test` and `Secret scan` checks,
   and require pull requests. This keeps the release tag pointing at reviewed, green code.
 
-## Cutting a release
+## Cutting a release, each time
 
-1. Add a section to `CHANGELOG.md` for the version, for example `## [0.1.0] - 2026-10-15`, and
-   move the entries out of *Unreleased*. Commit and merge it to `main`. The release job refuses
-   to run without this section.
-2. Tag and push:
+1. **Check main is green.** The Actions tab must show the latest CI run on `main` passing.
+   The release job runs the full build again and refuses a tag that is not on `main`.
+2. **Write the changelog section.** In `CHANGELOG.md`, add `## [0.1.0] - 2026-10-15` under
+   `[Unreleased]`, move the entries into it, and add the version link at the bottom. Open a
+   pull request for this change and merge it. The release job refuses to run without a
+   `## [0.1.0]` heading, so this step cannot be skipped.
+3. **Tag the merge commit and push the tag.** The tag is the version; nothing in the
+   repository holds a version number.
 
    ```
    git checkout main && git pull
@@ -68,14 +83,19 @@ reminder in your calendar, because an expired key makes every release fail at th
    git push origin v0.1.0
    ```
 
-3. In the *Actions* tab, approve the `maven-central` deployment when the job pauses.
-4. The job uploads a validated deployment. Open <https://central.sonatype.com/publishing> and
-   press *Publish*. Artifacts appear on Maven Central within a few minutes and are searchable
-   within a few hours.
-5. Check the GitHub Release the job created and edit the notes if you like.
+4. **Approve the deployment.** Open the *Actions* tab, click the *Release* run, and press
+   *Review deployments* then *Approve*. The job pauses here until you do, so nothing is signed
+   or uploaded without a person pressing the button.
+5. **Publish in the Portal.** When the job finishes, open
+   <https://central.sonatype.com/publishing>, find the validated deployment, and press
+   *Publish*. Artifacts are on Maven Central within minutes and searchable within hours.
+6. **Check the GitHub Release** the job created under *Releases*. It carries the jar, its
+   SHA-256, and the sources and javadoc jars. Edit the notes if you like.
 
-Once a release has gone through cleanly, you can make step 4 automatic by changing the Gradle
-task in the workflow from `publishToMavenCentral` to `publishAndReleaseToMavenCentral`.
+If step 4 or 5 fails, fix the cause on `main`, then tag the next patch version; a tag can be
+reused only if the deployment never reached the Portal. Once a release has gone through cleanly
+you can make step 5 automatic by changing the Gradle task in the workflow from
+`publishToMavenCentral` to `publishAndReleaseToMavenCentral`.
 
 ## Limits to keep in mind
 
