@@ -1,0 +1,6 @@
+.git
+.gradle
+build
+validation/out
+validation/.cache
+**/.DS_Store

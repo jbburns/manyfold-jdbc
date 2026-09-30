@@ -1,0 +1,53 @@
+# Build output
+.gradle/
+build/
+out/
+target/
+*.class
+*.log
+
+# GUI validation harness output and downloads (validation/README.md). The generic out/ rule
+# above would also hide validation/out/.gitkeep, so re-include the folder and ignore its contents.
+!validation/out/
+validation/out/*
+!validation/out/.gitkeep
+validation/.cache/
+
+# IDE and OS
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.project
+.classpath
+.DS_Store
+Thumbs.db
+
+# Local configuration and credentials. Project gradle.properties IS committed and holds
+# defaults only; everything below must never be committed.
+local.properties
+.env
+.env.*
+*.gpg
+*.asc
+*.pgp
+*.key
+*.pem
+*.p12
+*.jks
+*.keystore
+secring.*
+pubring.*
+settings.xml
+gradle.properties.local
+**/gradle-local.properties
+
+# Test scratch databases
+*.db
+*.sqlite
+*.sqlite3
+*.mv.db
+*.trace.db
+test-output/
