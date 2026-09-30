@@ -20,13 +20,14 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOG_DIR="${LOG_DIR:-/tmp/manyfold-validation-db}"
+LOG_DIR="${LOG_DIR:-$(mktemp -d -t manyfold-validation-db.XXXXXX)}"
 
 log() { printf '[start-local] %s\n' "$*"; }
 die() { printf '[start-local] ERROR: %s\n' "$*" >&2; exit 1; }
 
 [ "$(id -u)" -eq 0 ] || die "run as root (sudo validation/db/start-local.sh)"
 mkdir -p "$LOG_DIR"
+log "logs in $LOG_DIR"
 
 # ---- 1. packages ------------------------------------------------------------------------------
 if ! command -v mariadbd >/dev/null 2>&1 || ! command -v pg_ctlcluster >/dev/null 2>&1; then
@@ -59,7 +60,7 @@ if ! maria_up >/dev/null 2>&1; then
     if [ ! -d /var/lib/mysql/mysql ]; then
       mariadb-install-db --user=mysql --datadir=/var/lib/mysql >"$LOG_DIR/mariadb-install.log" 2>&1
     fi
-    nohup mariadbd --user=mysql --bind-address=0.0.0.0 >"$LOG_DIR/mariadbd.log" 2>&1 &
+    nohup mariadbd --user=mysql --bind-address=127.0.0.1 >"$LOG_DIR/mariadbd.log" 2>&1 &
   fi
   wait_for "MariaDB" maria_up
 fi
@@ -86,9 +87,10 @@ log "PostgreSQL $PG_VERSION is up"
 # ---- 3a. MariaDB: database, user, seed --------------------------------------------------------
 mariadb --protocol=socket <<'SQL'
 CREATE DATABASE IF NOT EXISTS demo;
-CREATE USER IF NOT EXISTS 'demo'@'%' IDENTIFIED BY 'demo';
+DROP USER IF EXISTS 'demo'@'%';
+CREATE USER IF NOT EXISTS 'demo'@'127.0.0.1' IDENTIFIED BY 'demo';
 CREATE USER IF NOT EXISTS 'demo'@'localhost' IDENTIFIED BY 'demo';
-GRANT ALL ON demo.* TO 'demo'@'%';
+GRANT ALL ON demo.* TO 'demo'@'127.0.0.1';
 GRANT ALL ON demo.* TO 'demo'@'localhost';
 FLUSH PRIVILEGES;
 SQL

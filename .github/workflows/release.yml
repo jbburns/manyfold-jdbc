@@ -68,8 +68,9 @@ jobs:
           cache-read-only: true
 
       - name: Build and test the release version
-        run: ./gradlew build --no-daemon -Pversion=${{ steps.version.outputs.version }}
+        run: ./gradlew build --no-daemon "-Pversion=${VERSION}"
         env:
+          VERSION: ${{ steps.version.outputs.version }}
           ORG_GRADLE_PROJECT_org.gradle.java.installations.fromEnv: JAVA_HOME_17_X64,JAVA_HOME_21_X64
 
       # Uploads a validated, signed deployment to the Central Portal. It waits there for a person
@@ -77,8 +78,9 @@ jobs:
       - name: Publish to Maven Central
         run: >-
           ./gradlew publishToMavenCentral --no-daemon --no-configuration-cache
-          -Pversion=${{ steps.version.outputs.version }}
+          "-Pversion=${VERSION}"
         env:
+          VERSION: ${{ steps.version.outputs.version }}
           ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.CENTRAL_USERNAME }}
           ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.CENTRAL_PASSWORD }}
           ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.SIGNING_KEY }}

@@ -196,7 +196,7 @@ find "$OUT_DIR" -maxdepth 1 \( -name '*.png' -o -name RESULT.txt -o -name squirr
   -delete
 
 # ---- driver bundle ----------------------------------------------------------------------------
-find_jar() { find "$BUNDLE_DIR" -maxdepth 1 -name "$1" 2>/dev/null | sort | head -1; }
+find_jar() { { find "$BUNDLE_DIR" -maxdepth 1 -name "$1" 2>/dev/null || true; } | sort | head -1; }
 
 MANYFOLD_JAR="$(find_jar 'manyfold-jdbc-*.jar')"
 H2_JAR="$(find_jar 'h2-*.jar')"

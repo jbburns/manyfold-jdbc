@@ -31,8 +31,10 @@ jdbc:manyfold:prod=jdbc:postgresql://prod-host:5432/app || dev=jdbc:postgresql:/
 4. Metadata calls that need a single answer, such as the table list a SQL client shows in its
    tree, are answered by the first backend.
 
-By default the driver is **read-only**: anything that is not a query is refused before it
-reaches a backend. Set `readOnly=false` in the URL options to fan writes out to every backend.
+By default the driver is **read-only**, which is a keyword guard that protects against
+accidents, not a security boundary. It refuses statements it cannot classify as queries, and
+anyone pointing it at a database that matters should also connect with read-only database
+credentials. Set `readOnly=false` in the URL options to fan writes out to every backend.
 
 ## Try it in five minutes
 
@@ -206,6 +208,8 @@ without a `Class.forName` call.
   are summed element-wise, and `commit`, `rollback` and savepoints reach every backend. There is
   no distributed transaction: a commit that succeeds on one backend and fails on another leaves
   them different.
+- **Vendor objects are not wrapped.** The values returned by `getArray`, `getBlob`, `getClob` and
+  `getObject` are the backend's own objects, passed through as they are.
 - **Single-valued calls go to the first backend.** `DatabaseMetaData`, generated LOB objects,
   warnings and similar come from the first backend in the URL.
 - **Credentials never leak.** URLs are redacted before they appear in names, messages, or

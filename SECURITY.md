@@ -16,8 +16,9 @@ databases behind them are out of scope here and should be reported to their main
 
 In scope:
 
-- The driver forwarding a statement to a backend it should not have, such as a write reaching a
-  backend while read-only mode is enabled.
+- The driver forwarding a statement to a backend it should not have. A write that slips past the
+  read-only guard while read-only mode is enabled is a guard bypass worth reporting. The guard is
+  a heuristic, and read-only database credentials are the real control.
 - Credentials or connection details leaking into logs, exceptions, or the merged result set.
 - Unsafe handling of the JDBC URL or driver properties.
 

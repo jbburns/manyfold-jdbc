@@ -14,14 +14,14 @@ name: manyfold-validation
 
 services:
   mariadb:
-    image: mariadb:11
+    image: mariadb:11@sha256:79d59758afc91b89b120b0a8904d637f5a3b3e1c4900f29b740d6d46c72fef68
     environment:
       MARIADB_DATABASE: demo
       MARIADB_USER: demo
       MARIADB_PASSWORD: demo
       MARIADB_ROOT_PASSWORD: root
     ports:
-      - "3306:3306"
+      - "127.0.0.1:3306:3306"
     volumes:
       - ./db/mariadb-init.sql:/docker-entrypoint-initdb.d/mariadb-init.sql:ro
     healthcheck:
@@ -32,13 +32,13 @@ services:
       start_period: 5s
 
   postgres:
-    image: postgres:17
+    image: postgres:17@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f
     environment:
       POSTGRES_DB: demo
       POSTGRES_USER: demo
       POSTGRES_PASSWORD: demo
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - ./db/postgres-init.sql:/docker-entrypoint-initdb.d/postgres-init.sql:ro
     healthcheck:
