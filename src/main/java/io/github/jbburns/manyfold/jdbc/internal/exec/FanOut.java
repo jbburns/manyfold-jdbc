@@ -94,8 +94,31 @@ public final class FanOut implements AutoCloseable {
    */
   public <D, T extends @Nullable Object> List<T> parallel(
       List<D> delegates, Call<D, T> call, Runnable onInterrupt) throws SQLException {
+    return parallel(delegates, call, onInterrupt, null);
+  }
+
+  /**
+   * Runs the call on every delegate concurrently and waits for all of them, naming in a failure the
+   * statement text that backend was sent.
+   *
+   * @param delegates one delegate per backend, in URL order
+   * @param call the operation
+   * @param onInterrupt runs when the waiting thread is interrupted
+   * @param sent per backend, the statement text it was sent when that differs from what the caller
+   *     supplied, or null entries and a null list when none does; shown in a failure message
+   * @param <D> delegate type
+   * @param <T> result type
+   * @return results in URL order
+   * @throws SQLException if any backend failed
+   */
+  public <D, T extends @Nullable Object> List<T> parallel(
+      List<D> delegates,
+      Call<D, T> call,
+      Runnable onInterrupt,
+      @Nullable List<@Nullable String> sent)
+      throws SQLException {
     if (delegates.size() == 1) {
-      return sequential(delegates, call);
+      return sequential(delegates, call, sent);
     }
     ThreadPoolExecutor pool = executor();
     List<Future<T>> futures = new ArrayList<>(delegates.size());
@@ -142,7 +165,7 @@ public final class FanOut implements AutoCloseable {
             "Interrupted while waiting for backend '" + names.get(i) + "'", "HY008", e);
       }
     }
-    throwIfAnyFailed(failures, results);
+    throwIfAnyFailed(failures, results, sent);
     return results;
   }
 
@@ -158,6 +181,25 @@ public final class FanOut implements AutoCloseable {
    */
   public <D, T extends @Nullable Object> List<T> sequential(List<D> delegates, Call<D, T> call)
       throws SQLException {
+    return sequential(delegates, call, null);
+  }
+
+  /**
+   * Runs the call on every delegate in URL order, giving each its turn even after a failure, and
+   * naming in a failure the statement text that backend was sent.
+   *
+   * @param delegates one delegate per backend, in URL order
+   * @param call the operation
+   * @param sent per backend, the statement text it was sent when that differs from what the caller
+   *     supplied, or null entries and a null list when none does; shown in a failure message
+   * @param <D> delegate type
+   * @param <T> result type
+   * @return results in URL order
+   * @throws SQLException if any backend failed
+   */
+  public <D, T extends @Nullable Object> List<T> sequential(
+      List<D> delegates, Call<D, T> call, @Nullable List<@Nullable String> sent)
+      throws SQLException {
     ensureOpen();
     List<T> results = new ArrayList<>(delegates.size());
     List<@Nullable Throwable> failures = new ArrayList<>(delegates.size());
@@ -170,12 +212,13 @@ public final class FanOut implements AutoCloseable {
         failures.add(t);
       }
     }
-    throwIfAnyFailed(failures, results);
+    throwIfAnyFailed(failures, results, sent);
     return results;
   }
 
   private <T extends @Nullable Object> void throwIfAnyFailed(
-      List<@Nullable Throwable> failures, List<T> results) throws SQLException {
+      List<@Nullable Throwable> failures, List<T> results, @Nullable List<@Nullable String> sent)
+      throws SQLException {
     SQLException first = null;
     SQLException last = null;
     for (int i = 0; i < failures.size(); i++) {
@@ -186,7 +229,9 @@ public final class FanOut implements AutoCloseable {
       if (failure instanceof Error error) {
         throw error;
       }
-      SQLException wrapped = ManyfoldException.backendFailed(names.get(i), failure);
+      SQLException wrapped =
+          ManyfoldException.backendFailed(
+              names.get(i), failure, sent != null && i < sent.size() ? sent.get(i) : null);
       if (first == null) {
         first = wrapped;
       } else {

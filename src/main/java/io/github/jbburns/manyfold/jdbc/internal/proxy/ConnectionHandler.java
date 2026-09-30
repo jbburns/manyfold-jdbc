@@ -4,6 +4,8 @@ import io.github.jbburns.manyfold.jdbc.ManyfoldException;
 import io.github.jbburns.manyfold.jdbc.internal.backend.Backend;
 import io.github.jbburns.manyfold.jdbc.internal.exec.FanOut;
 import io.github.jbburns.manyfold.jdbc.internal.guard.ReadOnlyGuard;
+import io.github.jbburns.manyfold.jdbc.internal.rewrite.BackendSql;
+import io.github.jbburns.manyfold.jdbc.internal.rewrite.Directives;
 import io.github.jbburns.manyfold.jdbc.internal.url.Options;
 import java.lang.reflect.Method;
 import java.sql.CallableStatement;
@@ -21,10 +23,11 @@ import org.jspecify.annotations.Nullable;
 /**
  * A {@link Connection} over N backend connections.
  *
- * <p>Statements are created on every backend and wrapped. Transaction and session settings fan out
- * to every backend. Anything that returns a single value is answered by the first backend. In
- * read-only mode, attempts to turn the read-only flag off are ignored so the backends stay in the
- * state the connector put them in.
+ * <p>Statements are created on every backend and wrapped. A prepared statement is prepared once,
+ * with each backend receiving its own text if a leading {@code manyfold} directive asks for
+ * substitutions. Transaction and session settings fan out to every backend. Anything that returns a
+ * single value is answered by the first backend. In read-only mode, attempts to turn the read-only
+ * flag off are ignored so the backends stay in the state the connector put them in.
  *
  * <p>Objects that cannot be merged come from the primary (first) backend only: {@code createBlob},
  * {@code createClob}, {@code createNClob}, {@code createSQLXML}, {@code createArrayOf} and {@code
@@ -223,10 +226,18 @@ final class ConnectionHandler extends BaseHandler {
       }
       ReadOnlyGuard.check(sql);
     }
+    // The guard has seen the text as the caller wrote it. Directives are read next and rejected
+    // before any backend is called; each backend then prepares its own text.
+    BackendSql plan = sql == null ? null : Directives.plan(sql, fanOut.names());
     List<Statement> statements = new ArrayList<>(connections.size());
     try {
-      for (Connection connection : connections) {
-        statements.add((Statement) Objects.requireNonNull(call(method, connection, args)));
+      for (int i = 0; i < connections.size(); i++) {
+        Object[] own = args;
+        if (plan != null) {
+          own = args.clone();
+          own[0] = plan.sqlFor(i);
+        }
+        statements.add((Statement) Objects.requireNonNull(call(method, connections.get(i), own)));
       }
     } catch (Throwable t) {
       for (Statement statement : statements) {
@@ -237,9 +248,11 @@ final class ConnectionHandler extends BaseHandler {
         }
       }
       int failed = statements.size();
-      throw ManyfoldException.backendFailed(fanOut.names().get(failed), t);
+      List<@Nullable String> sent = plan == null ? null : plan.sent();
+      throw ManyfoldException.backendFailed(
+          fanOut.names().get(failed), t, sent == null ? null : sent.get(failed));
     }
-    return Proxies.statement(type, statements, this, sql);
+    return Proxies.statement(type, statements, this, plan);
   }
 
   private void close() throws SQLException {

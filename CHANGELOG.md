@@ -17,6 +17,9 @@ All notable changes to this project are documented here. The format follows
   connection properties.
 - Vendor driver discovery through the driver's own class loader, so a single SQL-client driver
   definition holding the manyfold jar and the vendor jars is enough.
+- Per-backend schema substitution: a leading `-- manyfold <backend>: from=to, ...` comment
+  replaces qualifier identifiers (or deletes them with `from=`) in the statement sent to that
+  backend, so one query can address differently named schemas or databases on each backend.
 - Release workflow publishing signed artifacts to Maven Central from a tag.
 - Project scaffold: Gradle 9 build, formatting and static analysis, CI, secret scanning,
   dependency review, CodeQL, and community documents.
