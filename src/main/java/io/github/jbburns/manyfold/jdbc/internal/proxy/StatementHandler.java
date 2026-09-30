@@ -3,6 +3,8 @@ package io.github.jbburns.manyfold.jdbc.internal.proxy;
 import io.github.jbburns.manyfold.jdbc.ManyfoldException;
 import io.github.jbburns.manyfold.jdbc.internal.exec.FanOut;
 import io.github.jbburns.manyfold.jdbc.internal.guard.ReadOnlyGuard;
+import io.github.jbburns.manyfold.jdbc.internal.rewrite.BackendSql;
+import io.github.jbburns.manyfold.jdbc.internal.rewrite.Directives;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -23,6 +25,10 @@ import org.jspecify.annotations.Nullable;
  * A {@link Statement}, {@link java.sql.PreparedStatement} or {@link java.sql.CallableStatement}
  * over N backend statements.
  *
+ * <p>SQL text passed to an execute or addBatch call, or to prepare, is read for {@code manyfold}
+ * directives; each backend then receives its own text, with the directive comments removed and that
+ * backend's identifier substitutions applied.
+ *
  * <p>Executions run on every backend concurrently and their results are merged: result sets become
  * one merged result set, update counts are summed. Parameter setters and other void methods fan out
  * sequentially. Single-valued getters come from the first backend. With one backend, streams and
@@ -41,14 +47,21 @@ final class StatementHandler extends BaseHandler {
   private final List<Statement> statements;
   private final ConnectionHandler connection;
   private final FanOut fanOut;
-  private final @Nullable String preparedSql;
+  private final @Nullable BackendSql prepared;
+  private final List<Integer> indexes;
   private @Nullable Statement proxy;
 
-  StatementHandler(List<Statement> statements, ConnectionHandler connection, @Nullable String sql) {
+  StatementHandler(
+      List<Statement> statements, ConnectionHandler connection, @Nullable BackendSql prepared) {
     this.statements = List.copyOf(statements);
     this.connection = connection;
     this.fanOut = connection.fanOut();
-    this.preparedSql = sql;
+    this.prepared = prepared;
+    List<Integer> positions = new ArrayList<>(statements.size());
+    for (int i = 0; i < statements.size(); i++) {
+      positions.add(i);
+    }
+    this.indexes = List.copyOf(positions);
   }
 
   void attach(Statement proxy) {
@@ -76,34 +89,44 @@ final class StatementHandler extends BaseHandler {
     switch (method.getName()) {
       case "executeQuery" -> {
         guard(sqlArgument(method, args));
+        BackendSql plan = plan(method, args);
         List<ResultSet> results =
-            parallel(s -> (ResultSet) Objects.requireNonNull(call(method, s, args)));
+            parallel(
+                plan, args, (s, own) -> (ResultSet) Objects.requireNonNull(call(method, s, own)));
         return merged(results);
       }
       case "execute" -> {
         guard(sqlArgument(method, args));
+        BackendSql plan = plan(method, args);
         List<Boolean> results =
-            parallel(s -> (Boolean) Objects.requireNonNull(call(method, s, args)));
+            parallel(
+                plan, args, (s, own) -> (Boolean) Objects.requireNonNull(call(method, s, own)));
         return agree(results, "execute");
       }
       case "executeUpdate", "executeLargeUpdate" -> {
         refuseWrite(method.getName(), sqlArgument(method, args));
-        List<Number> counts = parallel(s -> (Number) Objects.requireNonNull(call(method, s, args)));
+        BackendSql plan = plan(method, args);
+        List<Number> counts =
+            parallel(plan, args, (s, own) -> (Number) Objects.requireNonNull(call(method, s, own)));
         return sum(counts, method.getReturnType() == long.class);
       }
       case "addBatch" -> {
         refuseWrite("addBatch", sqlArgument(method, args));
-        fanOut.sequential(statements, s -> call(method, s, args));
+        BackendSql plan = plan(method, args);
+        fanOut.sequential(
+            indexes, i -> call(method, statements.get(i), argsFor(plan, i, args)), sent(plan));
         return null;
       }
       case "executeBatch" -> {
         refuseWrite("executeBatch", null);
-        List<int[]> counts = parallel(s -> (int[]) Objects.requireNonNull(call(method, s, args)));
+        List<int[]> counts =
+            parallel(null, args, (s, own) -> (int[]) Objects.requireNonNull(call(method, s, own)));
         return sumIntArrays(counts);
       }
       case "executeLargeBatch" -> {
         refuseWrite("executeLargeBatch", null);
-        List<long[]> counts = parallel(s -> (long[]) Objects.requireNonNull(call(method, s, args)));
+        List<long[]> counts =
+            parallel(null, args, (s, own) -> (long[]) Objects.requireNonNull(call(method, s, own)));
         return sumLongArrays(counts);
       }
       case "getResultSet", "getGeneratedKeys" -> {
@@ -198,9 +221,55 @@ final class StatementHandler extends BaseHandler {
     }
   }
 
-  /** Runs an execution on every backend concurrently, cancelling all of them on interrupt. */
-  private <T> List<T> parallel(FanOut.Call<Statement, T> call) throws SQLException {
-    return fanOut.parallel(statements, call, this::cancelQuietly);
+  /** One operation on one backend's statement, with the arguments meant for that backend. */
+  @FunctionalInterface
+  private interface BackendCall<T> {
+    T apply(Statement statement, Object[] args) throws Throwable;
+  }
+
+  /**
+   * Runs an execution on every backend concurrently, cancelling all of them on interrupt. When the
+   * call carried its own SQL, every backend receives its text from {@code plan} in place of the
+   * first argument; otherwise the arguments pass through unchanged.
+   */
+  private <T> List<T> parallel(@Nullable BackendSql plan, Object[] args, BackendCall<T> call)
+      throws SQLException {
+    return fanOut.parallel(
+        indexes,
+        i -> call.apply(statements.get(i), argsFor(plan, i, args)),
+        this::cancelQuietly,
+        sent(plan));
+  }
+
+  /**
+   * Reads the directives of the SQL text passed to an execute or addBatch call. Runs after the
+   * read-only check, so directives never reach the guard, and before any backend is called.
+   *
+   * @return the text for each backend, or null when the call carries no SQL of its own
+   */
+  private @Nullable BackendSql plan(Method method, Object[] args) throws ManyfoldException {
+    if (args.length > 0
+        && method.getParameterTypes()[0] == String.class
+        && args[0] instanceof String sql) {
+      return Directives.plan(sql, fanOut.names());
+    }
+    return null;
+  }
+
+  /** The arguments for one backend: the caller's, with its own text in place of the SQL. */
+  private static Object[] argsFor(@Nullable BackendSql plan, int backend, Object[] args) {
+    if (plan == null) {
+      return args;
+    }
+    Object[] own = args.clone();
+    own[0] = plan.sqlFor(backend);
+    return own;
+  }
+
+  /** What to show in a failure message: the text the backend was sent, when it was changed. */
+  private @Nullable List<@Nullable String> sent(@Nullable BackendSql plan) {
+    BackendSql source = plan != null ? plan : prepared;
+    return source == null ? null : source.sent();
   }
 
   private void cancelQuietly() {
@@ -303,7 +372,7 @@ final class StatementHandler extends BaseHandler {
       }
       return (String) args[0];
     }
-    return preparedSql;
+    return prepared == null ? null : prepared.original();
   }
 
   private void guard(@Nullable String sql) throws ManyfoldException {

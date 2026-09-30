@@ -1,6 +1,7 @@
 package io.github.jbburns.manyfold.jdbc.internal.proxy;
 
 import io.github.jbburns.manyfold.jdbc.internal.backend.Backend;
+import io.github.jbburns.manyfold.jdbc.internal.rewrite.BackendSql;
 import io.github.jbburns.manyfold.jdbc.internal.url.Options;
 import java.lang.reflect.Proxy;
 import java.sql.Connection;
@@ -41,8 +42,8 @@ public final class Proxies {
       Class<? extends Statement> type,
       List<Statement> statements,
       ConnectionHandler connection,
-      @Nullable String sql) {
-    StatementHandler handler = new StatementHandler(statements, connection, sql);
+      @Nullable BackendSql prepared) {
+    StatementHandler handler = new StatementHandler(statements, connection, prepared);
     Statement proxy = type.cast(Proxy.newProxyInstance(loader(), new Class<?>[] {type}, handler));
     handler.attach(proxy);
     return proxy;

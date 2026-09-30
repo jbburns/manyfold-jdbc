@@ -27,7 +27,12 @@ Requires JDK 21 to build. Bytecode targets Java 17. Gradle provisions a JDK 17 f
 
 1. **Zero runtime dependencies.** `compileOnly` and test scopes only. The published POM must
    list no dependencies. The jar is loaded by SQL clients on a flat classpath.
-2. **SQL is forwarded verbatim.** Never parse, rewrite or reformat a statement.
+2. **SQL is forwarded verbatim** except for identifier substitutions requested by a leading
+   `-- manyfold <backend>: ...` directive. Substitutions are identifier-only and validated: only
+   an identifier in qualifier position (followed directly by `.`) is replaced, never text inside
+   a string, comment or bracket, and a malformed or unknown directive fails the statement. The
+   read-only guard sees the original text. Never otherwise parse, rewrite or reformat a
+   statement.
 3. **Read-only by default.** With `readOnly=true` (the default) the driver refuses
    `executeUpdate`, `executeLargeUpdate`, batches, and any `execute`/`executeQuery` whose
    first keyword is not one of the read-only allowlist. It also calls `setReadOnly(true)`
@@ -51,6 +56,8 @@ io.github.jbburns.manyfold.jdbc.internal   everything else; may change without n
   backend/    vendor driver resolution, backend connections, fan-out execution
   proxy/      JDK dynamic-proxy handlers for Connection, Statement, PreparedStatement, ResultSet
   guard/      read-only classification
+  lex/        the SQL lexer shared by guard/ and rewrite/ (quotes, comments, brackets)
+  rewrite/    leading `manyfold` directives and per-backend identifier substitution
 ```
 
 ## URL syntax
