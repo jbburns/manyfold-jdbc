@@ -1,8 +1,5 @@
 # manyfold-jdbc
 
-**Why "manyfold":** a manifold is the engine part that joins several pipes into one. This
-driver takes many database queries and folds them into a single result set.
-
 A pass-through JDBC driver that runs one SQL statement against several databases and returns
 the rows as a single result set, with a `source_database` column telling you where each row
 came from.
@@ -193,6 +190,11 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and
 
 Maintained on a best-effort basis with no response-time commitment. Issues and pull requests are
 welcome; see [SUPPORT.md](SUPPORT.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Why "manyfold"
+
+A manifold is the engine part that joins several pipes into one. This driver takes many
+database queries and folds them into a single result set.
 
 ## License
 
