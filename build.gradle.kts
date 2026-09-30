@@ -188,7 +188,7 @@ mavenPublishing {
         developers {
             developer {
                 id = "jbburns"
-                name = "Jonathan Burns"
+                name = "jbburns"
                 url = "https://github.com/jbburns"
             }
         }
