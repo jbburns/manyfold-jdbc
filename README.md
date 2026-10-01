@@ -33,7 +33,8 @@ The jar has no dependencies. Put the vendor JDBC drivers for your backends next 
 You have the same schema in more than one place, prod and dev, or one database per region, and
 you want to run a query against all of them from a normal SQL client and see the results side by
 side. manyfold-jdbc sits between your client and the real JDBC drivers. It is a single jar with
-no dependencies, it does not run a server, and it does not parse or rewrite your SQL.
+no dependencies and it does not run a server. SQL is forwarded as written, apart from the
+read-only guard and the optional per-backend schema directive described below.
 
 ## How it works
 
@@ -43,7 +44,9 @@ jdbc:manyfold:prod=jdbc:postgresql://prod-host:5432/app || dev=jdbc:postgresql:/
 
 1. The driver opens one real connection per backend using the vendor drivers already on the
    client's driver classpath.
-2. Every statement is forwarded verbatim to every backend, concurrently.
+2. Every statement is sent to every backend, concurrently. The text goes through as written
+   unless the read-only guard refuses it or a schema directive renames a qualifier for one
+   backend.
 3. The rows come back concatenated in URL order. Column 1 is `source_database` and holds the
    logical name (`prod`, `dev`). The remaining columns are the backend's columns, unchanged.
 4. Metadata calls that need a single answer, such as the table list a SQL client shows in its
