@@ -60,6 +60,7 @@ jobs:
         with:
           distribution: temurin
           java-version: |
+            11
             17
             21
 
@@ -71,7 +72,7 @@ jobs:
         run: ./gradlew build --no-daemon "-Pversion=${VERSION}"
         env:
           VERSION: ${{ steps.version.outputs.version }}
-          ORG_GRADLE_PROJECT_org.gradle.java.installations.fromEnv: JAVA_HOME_17_X64,JAVA_HOME_21_X64
+          ORG_GRADLE_PROJECT_org.gradle.java.installations.fromEnv: JAVA_HOME_11_X64,JAVA_HOME_17_X64,JAVA_HOME_21_X64
 
       # Uploads a validated, signed deployment to the Central Portal and releases it. The only
       # human gate is the environment approval above. To inspect a deployment before it goes

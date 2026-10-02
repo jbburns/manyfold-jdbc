@@ -7,8 +7,9 @@ A practical guide for someone who has just cloned the repository. The design rul
 
 You need JDK 21. Nothing else.
 
-The Gradle wrapper (`./gradlew`) downloads Gradle itself. Gradle downloads a JDK 17 by itself for
-the `test17` task if you have none. The bytecode targets Java 17, but the build runs on 21.
+The Gradle wrapper (`./gradlew`) downloads Gradle itself. Gradle downloads JDKs 11 and 17 by
+itself for the `test11` and `test17` tasks if you have none. The bytecode targets Java 11, but the
+build runs on 21.
 
 Check your JDK:
 
@@ -29,7 +30,7 @@ This is everything CI runs. In order, it:
 
 1. Compiles the code with Error Prone and NullAway. Warnings are errors.
 2. Checks formatting with Spotless (google-java-format). It does not fix anything.
-3. Runs the unit tests on the build JDK (`test`) and again on JDK 17 (`test17`).
+3. Runs the unit tests on the build JDK (`test`) and again on JDK 11 (`test11`) and JDK 17 (`test17`).
 4. Writes the JaCoCo coverage report.
 5. Builds the Javadoc with warnings as errors.
 
@@ -48,6 +49,7 @@ build.
 
 ```
 ./gradlew test                      # build JDK only, the fast loop
+./gradlew test11                    # the same tests on a JDK 11 runtime
 ./gradlew test17                    # the same tests on a JDK 17 runtime
 ./gradlew test --tests '*ReadOnly*' # one class or a name pattern
 ```

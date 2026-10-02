@@ -87,137 +87,159 @@ final class StatementHandler extends BaseHandler {
   @Override
   protected @Nullable Object dispatch(Method method, Object[] args) throws Throwable {
     switch (method.getName()) {
-      case "executeQuery" -> {
-        guard(sqlArgument(method, args));
-        BackendSql plan = plan(method, args);
-        List<ResultSet> results =
-            parallel(
-                plan, args, (s, own) -> (ResultSet) Objects.requireNonNull(call(method, s, own)));
-        return merged(results);
-      }
-      case "execute" -> {
-        guard(sqlArgument(method, args));
-        BackendSql plan = plan(method, args);
-        List<Boolean> results =
-            parallel(
-                plan, args, (s, own) -> (Boolean) Objects.requireNonNull(call(method, s, own)));
-        return agree(results, "execute");
-      }
-      case "executeUpdate", "executeLargeUpdate" -> {
-        refuseWrite(method.getName(), sqlArgument(method, args));
-        BackendSql plan = plan(method, args);
-        List<Number> counts =
-            parallel(plan, args, (s, own) -> (Number) Objects.requireNonNull(call(method, s, own)));
-        return sum(counts, method.getReturnType() == long.class);
-      }
-      case "addBatch" -> {
-        refuseWrite("addBatch", sqlArgument(method, args));
-        BackendSql plan = plan(method, args);
-        fanOut.sequential(
-            indexes, i -> call(method, statements.get(i), argsFor(plan, i, args)), sent(plan));
-        return null;
-      }
-      case "executeBatch" -> {
-        refuseWrite("executeBatch", null);
-        List<int[]> counts =
-            parallel(null, args, (s, own) -> (int[]) Objects.requireNonNull(call(method, s, own)));
-        return sumIntArrays(counts);
-      }
-      case "executeLargeBatch" -> {
-        refuseWrite("executeLargeBatch", null);
-        List<long[]> counts =
-            parallel(null, args, (s, own) -> (long[]) Objects.requireNonNull(call(method, s, own)));
-        return sumLongArrays(counts);
-      }
-      case "getResultSet", "getGeneratedKeys" -> {
-        List<@Nullable ResultSet> results =
-            fanOut.sequential(statements, s -> (ResultSet) call(method, s, args));
-        if (results.get(0) == null) {
-          closeAll(results);
+      case "executeQuery":
+        {
+          guard(sqlArgument(method, args));
+          BackendSql plan = plan(method, args);
+          List<ResultSet> results =
+              parallel(
+                  plan, args, (s, own) -> (ResultSet) Objects.requireNonNull(call(method, s, own)));
+          return merged(results);
+        }
+      case "execute":
+        {
+          guard(sqlArgument(method, args));
+          BackendSql plan = plan(method, args);
+          List<Boolean> results =
+              parallel(
+                  plan, args, (s, own) -> (Boolean) Objects.requireNonNull(call(method, s, own)));
+          return agree(results, "execute");
+        }
+      case "executeUpdate":
+      case "executeLargeUpdate":
+        {
+          refuseWrite(method.getName(), sqlArgument(method, args));
+          BackendSql plan = plan(method, args);
+          List<Number> counts =
+              parallel(
+                  plan, args, (s, own) -> (Number) Objects.requireNonNull(call(method, s, own)));
+          return sum(counts, method.getReturnType() == long.class);
+        }
+      case "addBatch":
+        {
+          refuseWrite("addBatch", sqlArgument(method, args));
+          BackendSql plan = plan(method, args);
+          fanOut.sequential(
+              indexes, i -> call(method, statements.get(i), argsFor(plan, i, args)), sent(plan));
           return null;
         }
-        for (int i = 1; i < results.size(); i++) {
-          if (results.get(i) == null) {
+      case "executeBatch":
+        {
+          refuseWrite("executeBatch", null);
+          List<int[]> counts =
+              parallel(
+                  null, args, (s, own) -> (int[]) Objects.requireNonNull(call(method, s, own)));
+          return sumIntArrays(counts);
+        }
+      case "executeLargeBatch":
+        {
+          refuseWrite("executeLargeBatch", null);
+          List<long[]> counts =
+              parallel(
+                  null, args, (s, own) -> (long[]) Objects.requireNonNull(call(method, s, own)));
+          return sumLongArrays(counts);
+        }
+      case "getResultSet":
+      case "getGeneratedKeys":
+        {
+          List<@Nullable ResultSet> results =
+              fanOut.sequential(statements, s -> (ResultSet) call(method, s, args));
+          if (results.get(0) == null) {
             closeAll(results);
-            throw new ManyfoldException(
-                "Backend '"
-                    + fanOut.names().get(i)
-                    + "' produced no result set for "
-                    + method.getName()
-                    + " while '"
-                    + fanOut.names().get(0)
-                    + "' did",
-                "HY000");
+            return null;
           }
-        }
-        List<ResultSet> present = new ArrayList<>(results.size());
-        for (ResultSet rs : results) {
-          present.add(Objects.requireNonNull(rs));
-        }
-        return merged(present);
-      }
-      case "getUpdateCount", "getLargeUpdateCount" -> {
-        List<Number> counts =
-            fanOut.sequential(
-                statements, s -> (Number) Objects.requireNonNull(call(method, s, args)));
-        for (Number count : counts) {
-          if (count.longValue() < 0) {
-            return method.getReturnType() == long.class
-                ? (Number) Long.valueOf(-1L)
-                : (Number) Integer.valueOf(-1);
+          for (int i = 1; i < results.size(); i++) {
+            if (results.get(i) == null) {
+              closeAll(results);
+              throw new ManyfoldException(
+                  "Backend '"
+                      + fanOut.names().get(i)
+                      + "' produced no result set for "
+                      + method.getName()
+                      + " while '"
+                      + fanOut.names().get(0)
+                      + "' did",
+                  "HY000");
+            }
           }
+          List<ResultSet> present = new ArrayList<>(results.size());
+          for (ResultSet rs : results) {
+            present.add(Objects.requireNonNull(rs));
+          }
+          return merged(present);
         }
-        return sum(counts, method.getReturnType() == long.class);
-      }
-      case "getMoreResults" -> {
-        List<Boolean> results =
-            fanOut.sequential(
-                statements, s -> (Boolean) Objects.requireNonNull(call(method, s, args)));
-        return agree(results, "getMoreResults");
-      }
-      case "getConnection" -> {
-        return connection.proxy();
-      }
-      case "getMetaData" -> {
-        ResultSetMetaData meta = (ResultSetMetaData) call(method, primary(), args);
-        return meta == null
-            ? null
-            : new ManyfoldResultSetMetaData(meta, sourceColumn(), longestName());
-      }
-      case "isClosed" -> {
-        return connection.isClosed() || primary().isClosed();
-      }
-      case "close" -> {
-        if (connection.isClosed()) {
-          // The connection already closed its statements; closing again is a no-op.
-          closeQuietly();
-          return null;
+      case "getUpdateCount":
+      case "getLargeUpdateCount":
+        {
+          List<Number> counts =
+              fanOut.sequential(
+                  statements, s -> (Number) Objects.requireNonNull(call(method, s, args)));
+          for (Number count : counts) {
+            if (count.longValue() < 0) {
+              return method.getReturnType() == long.class
+                  ? (Number) Long.valueOf(-1L)
+                  : (Number) Integer.valueOf(-1);
+            }
+          }
+          return sum(counts, method.getReturnType() == long.class);
         }
-        fanOut.sequential(statements, s -> call(method, s, args));
-        return null;
-      }
-      case "cancel" -> {
-        fanOut.sequential(statements, s -> call(method, s, args));
-        return null;
-      }
-      case "setBinaryStream",
-          "setAsciiStream",
-          "setUnicodeStream",
-          "setCharacterStream",
-          "setNCharacterStream",
-          "setBlob",
-          "setClob",
-          "setNClob" -> {
-        setStream(method, args);
-        return null;
-      }
-      default -> {
-        if (method.getReturnType() == void.class) {
+      case "getMoreResults":
+        {
+          List<Boolean> results =
+              fanOut.sequential(
+                  statements, s -> (Boolean) Objects.requireNonNull(call(method, s, args)));
+          return agree(results, "getMoreResults");
+        }
+      case "getConnection":
+        {
+          return connection.proxy();
+        }
+      case "getMetaData":
+        {
+          ResultSetMetaData meta = (ResultSetMetaData) call(method, primary(), args);
+          return meta == null
+              ? null
+              : new ManyfoldResultSetMetaData(meta, sourceColumn(), longestName());
+        }
+      case "isClosed":
+        {
+          return connection.isClosed() || primary().isClosed();
+        }
+      case "close":
+        {
+          if (connection.isClosed()) {
+            // The connection already closed its statements; closing again is a no-op.
+            closeQuietly();
+            return null;
+          }
           fanOut.sequential(statements, s -> call(method, s, args));
           return null;
         }
-        return call(method, primary(), args);
-      }
+      case "cancel":
+        {
+          fanOut.sequential(statements, s -> call(method, s, args));
+          return null;
+        }
+      case "setBinaryStream":
+      case "setAsciiStream":
+      case "setUnicodeStream":
+      case "setCharacterStream":
+      case "setNCharacterStream":
+      case "setBlob":
+      case "setClob":
+      case "setNClob":
+        {
+          setStream(method, args);
+          return null;
+        }
+      default:
+        {
+          if (method.getReturnType() == void.class) {
+            fanOut.sequential(statements, s -> call(method, s, args));
+            return null;
+          }
+          return call(method, primary(), args);
+        }
     }
   }
 
@@ -250,8 +272,8 @@ final class StatementHandler extends BaseHandler {
   private @Nullable BackendSql plan(Method method, Object[] args) throws ManyfoldException {
     if (args.length > 0
         && method.getParameterTypes()[0] == String.class
-        && args[0] instanceof String sql) {
-      return Directives.plan(sql, fanOut.names());
+        && args[0] instanceof String) {
+      return Directives.plan((String) args[0], fanOut.names());
     }
     return null;
   }
@@ -304,14 +326,15 @@ final class StatementHandler extends BaseHandler {
     Object source = args[streamIndex];
     long limit = -1;
     if (args.length > streamIndex + 1
-        && args[streamIndex + 1] instanceof Number length
-        && length.longValue() >= 0) {
-      limit = length.longValue();
+        && args[streamIndex + 1] instanceof Number
+        && ((Number) args[streamIndex + 1]).longValue() >= 0) {
+      limit = ((Number) args[streamIndex + 1]).longValue();
     }
     byte[] bytes = null;
     String text = null;
     try {
-      if (source instanceof InputStream in) {
+      if (source instanceof InputStream) {
+        InputStream in = (InputStream) source;
         bytes = limit < 0 ? in.readAllBytes() : in.readNBytes((int) Math.min(limit, MAX_BUFFER));
       } else {
         text = readAtMost((Reader) source, limit);

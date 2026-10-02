@@ -1,5 +1,6 @@
 package io.github.jbburns.manyfold.jdbc.internal.lex;
 
+import java.util.Objects;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -31,16 +32,99 @@ public final class SqlLexer {
     COMMENT
   }
 
-  /**
-   * One token.
-   *
-   * @param kind what it is
-   * @param start offset of its first character
-   * @param end offset just past its last character
-   * @param dotted for a {@link Kind#WORD}: whether an identifier sits on the other side of an
-   *     adjacent dot, so it is a part of a qualified name rather than a keyword
-   */
-  public record Token(Kind kind, int start, int end, boolean dotted) {}
+  /** One token: what it is and where it sits in the statement. */
+  public static final class Token {
+    private final Kind kind;
+    private final int start;
+    private final int end;
+    private final boolean dotted;
+
+    /**
+     * Creates a token.
+     *
+     * @param kind what it is
+     * @param start offset of its first character
+     * @param end offset just past its last character
+     * @param dotted for a {@link Kind#WORD}: whether an identifier sits on the other side of an
+     *     adjacent dot, so it is a part of a qualified name rather than a keyword
+     */
+    public Token(Kind kind, int start, int end, boolean dotted) {
+      this.kind = kind;
+      this.start = start;
+      this.end = end;
+      this.dotted = dotted;
+    }
+
+    /**
+     * What the token is.
+     *
+     * @return the kind
+     */
+    public Kind kind() {
+      return kind;
+    }
+
+    /**
+     * Where the token starts.
+     *
+     * @return offset of its first character
+     */
+    public int start() {
+      return start;
+    }
+
+    /**
+     * Where the token ends.
+     *
+     * @return offset just past its last character
+     */
+    public int end() {
+      return end;
+    }
+
+    /**
+     * Whether a word is part of a qualified name.
+     *
+     * @return for a {@link Kind#WORD}, whether an identifier sits on the other side of an adjacent
+     *     dot
+     */
+    public boolean dotted() {
+      return dotted;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+      if (this == o) {
+        return true;
+      }
+      if (!(o instanceof Token)) {
+        return false;
+      }
+      Token other = (Token) o;
+      return kind == other.kind
+          && start == other.start
+          && end == other.end
+          && dotted == other.dotted;
+    }
+
+    @Override
+    public int hashCode() {
+      return Objects.hash(kind, start, end, dotted);
+    }
+
+    @Override
+    public String toString() {
+      return "Token[kind="
+          + kind
+          + ", start="
+          + start
+          + ", end="
+          + end
+          + ", dotted="
+          + dotted
+          + "]";
+    }
+  }
 
   private final String sql;
   private final boolean reportComments;

@@ -153,12 +153,16 @@ public final class ManyfoldUrl {
     String readOnly = values.get(lower(Options.READ_ONLY));
     if (readOnly != null) {
       switch (lower(readOnly)) {
-        case "true" -> result = new Options(result.sourceColumn(), true);
-        case "false" -> result = new Options(result.sourceColumn(), false);
-        default ->
-            throw malformed(
-                url,
-                "option '" + Options.READ_ONLY + "' must be true or false, not '" + readOnly + "'");
+        case "true":
+          result = new Options(result.sourceColumn(), true);
+          break;
+        case "false":
+          result = new Options(result.sourceColumn(), false);
+          break;
+        default:
+          throw malformed(
+              url,
+              "option '" + Options.READ_ONLY + "' must be true or false, not '" + readOnly + "'");
       }
     }
     return result;

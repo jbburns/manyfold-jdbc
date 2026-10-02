@@ -307,13 +307,14 @@ without a `Class.forName` call.
 
 ## Requirements
 
-- Java 17 or newer. SQuirreL SQL 5.x and current DBeaver both qualify.
+- Java 11 or newer. SQuirreL SQL 4.3 and later (and 4.2 when run on Java 11 or newer) and
+  current DBeaver all qualify.
 - The vendor JDBC driver for each backend.
 
 ## Building
 
 ```
-./gradlew build        # format check, static analysis, tests on Java 17 and 21, coverage
+./gradlew build        # format check, static analysis, tests on Java 11, 17 and 21, coverage
 ./gradlew jar          # just the driver jar, in build/libs/
 ```
 

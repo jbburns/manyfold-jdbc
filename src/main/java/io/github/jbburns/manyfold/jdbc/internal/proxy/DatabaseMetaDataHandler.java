@@ -23,18 +23,27 @@ final class DatabaseMetaDataHandler extends BaseHandler {
 
   @Override
   protected @Nullable Object dispatch(Method method, Object[] args) throws Throwable {
-    return switch (method.getName()) {
-      case "getConnection" -> connection.proxy();
-      case "getURL" -> connection.redactedUrl();
-      case "getDriverName" -> Manyfold.NAME;
-      case "getDriverVersion" -> Manyfold.version();
-      case "getDriverMajorVersion" -> Manyfold.majorVersion();
-      case "getDriverMinorVersion" -> Manyfold.minorVersion();
-      default -> {
-        Object result = call(method, primary, args);
-        yield result instanceof ResultSet rs ? Proxies.metaDataResultSet(rs) : result;
-      }
-    };
+    switch (method.getName()) {
+      case "getConnection":
+        return connection.proxy();
+      case "getURL":
+        return connection.redactedUrl();
+      case "getDriverName":
+        return Manyfold.NAME;
+      case "getDriverVersion":
+        return Manyfold.version();
+      case "getDriverMajorVersion":
+        return Manyfold.majorVersion();
+      case "getDriverMinorVersion":
+        return Manyfold.minorVersion();
+      default:
+        {
+          Object result = call(method, primary, args);
+          return result instanceof ResultSet
+              ? Proxies.metaDataResultSet((ResultSet) result)
+              : result;
+        }
+    }
   }
 
   @Override

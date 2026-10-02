@@ -7,8 +7,8 @@ has limited time, so the process is designed to need as little of it as possible
 
 - **Small, focused pull requests get merged.** One behaviour change per PR, with a test.
   Large unrequested rewrites may be closed without review.
-- **CI must be green.** The build runs formatting, static analysis and the tests on Java 17
-  and 21. Run `./gradlew build` locally first.
+- **CI must be green.** The build runs formatting, static analysis and the tests on Java 11,
+  17 and 21. Run `./gradlew build` locally first.
 - **No new runtime dependencies.** The jar is dropped into SQL clients next to vendor drivers,
   where nothing resolves transitive dependencies. Test and build dependencies are fine.
 - **Never commit credentials.** Not in tests, not in fixtures, not in URLs in documentation.
@@ -24,12 +24,12 @@ provided in section 5 of that license. There is no separate contributor agreemen
 ## Building
 
 ```
-./gradlew build            # format check, Error Prone + NullAway, tests on 17 and 21, coverage
+./gradlew build            # format check, Error Prone + NullAway, tests on 11, 17 and 21, coverage
 ./gradlew spotlessApply    # fix formatting
 ./gradlew test             # tests on the build JDK only, faster during development
 ```
 
-Gradle downloads a Java 17 runtime for the `test17` task if none is installed.
+Gradle downloads Java 11 and 17 runtimes for the `test11` and `test17` tasks if none are installed.
 
 See [DEVELOPING.md](DEVELOPING.md) for the full developer guide, including the GUI validation
 harness.
