@@ -17,17 +17,26 @@
 #               `docker compose -f validation/docker-compose.yml up -d mariadb postgres` or
 #               with validation/db/start-local.sh. See DEVELOPING.md.
 #
+# SQuirreL versions, chosen with SQUIRREL_VERSION (default 5.1.0):
+#   5.1.0  needs a JVM 17 or newer (SQuirreL 5.x itself requires it).
+#   4.2.0  the oldest SQuirreL the driver supports, run on Java 11 to 16 (its launcher refuses
+#          anything newer). h2 mode only. Screenshots are named s42-NN-<label>.png. Point
+#          SQUIRREL_JAVA_HOME at the JDK to launch it with, for example a JDK 14. See DEVELOPING.md.
+#
 # Usage:
 #   validation/run.sh                 full run, h2 mode
+#   SQUIRREL_VERSION=4.2.0 SQUIRREL_JAVA_HOME=/path/to/jdk14 validation/run.sh
 #   MODE=multi validation/run.sh      full run, three real backends
 #   validation/run.sh --install-only  download SQuirreL and the vendor jars, then exit
 #                                     (used by the Dockerfile)
 #
-# Needs: JDK 17+, Xvfb, xdotool, curl, and ImageMagick (import/convert) or scrot. Fonts: DejaVu.
+# Needs: JDK 17+ for SQuirreL 5.x (11 to 16 for 4.2.0), Xvfb, xdotool, curl, and ImageMagick (import/convert) or scrot. Fonts: DejaVu.
 #
 # Environment overrides:
 #   OUT_DIR       where screenshots, RESULT.txt and squirrel-sql.log go   (validation/out)
 #   CACHE_DIR     installer download and SQuirreL install location        (validation/.cache)
+#   SQUIRREL_VERSION   5.1.0 (default) or 4.2.0
+#   SQUIRREL_JAVA_HOME JDK that installs and launches SQuirreL (default: java on PATH)
 #   SQUIRREL_HOME use an existing SQuirreL install instead of installing
 #   BUNDLE_DIR    directory holding manyfold-jdbc-*.jar and h2-*.jar      (build/client)
 #   SKIP_BUILD=1  never run Gradle; fail if BUNDLE_DIR lacks the jars
@@ -54,10 +63,65 @@
 
 set -euo pipefail
 
-# ---- pinned SQuirreL release ------------------------------------------------------------------
-SQUIRREL_VERSION=5.1.0
-SQUIRREL_SHA256=a6ad409375aea36db5e158f6f5d1d7ae7c6ba0d1fecea98225e217e1ab123184
-SQUIRREL_URL="https://github.com/squirrel-sql-client/squirrel-sql-stable-releases/releases/download/${SQUIRREL_VERSION}-installer/squirrel-sql-${SQUIRREL_VERSION}-standard.jar"
+# ---- pinned SQuirreL releases -----------------------------------------------------------------
+# Everything that differs between versions is set in this one block (download, installer answers,
+# window title, GUI coordinates at 1600x1000, preferences). The 4.2.0 installer is not on GitHub;
+# SourceForge serves it. Its checksum was computed on a fresh download.
+SQUIRREL_VERSION="${SQUIRREL_VERSION:-5.1.0}"
+case "$SQUIRREL_VERSION" in
+  5.1.0)
+    SQUIRREL_SHA256=a6ad409375aea36db5e158f6f5d1d7ae7c6ba0d1fecea98225e217e1ab123184
+    SQUIRREL_URL="https://github.com/squirrel-sql-client/squirrel-sql-stable-releases/releases/download/${SQUIRREL_VERSION}-installer/squirrel-sql-${SQUIRREL_VERSION}-standard.jar"
+    AUTO_INSTALL_XML=auto-install.xml
+    SQUIRREL_JAVA_MIN=17
+    SQUIRREL_JAVA_MAX=999
+    VERSION_SHOT_PREFIX=""
+    MAIN_WIN_TITLE='SQuirreL SQL Client / Version'
+    # Fixed pixel positions. strip: crop of the session tab strip (WxH+X+Y). tree1/tree2: the
+    # click that selects the tree row and the keys that walk to the tables (h2 mode).
+    SESSION_STRIP_CROP=300x24+34+58
+    TREE_CLICK_H2="110 186"
+    TREE_KEYS_H2_1="Right Down Down Right"
+    TREE_KEYS_H2_2="Down Right"
+    SQL_TAB_CLICK="123 126"
+    DIVIDER_DRAG="700 192 700 250 700 300"
+    EDITOR_CLICK="700 230"
+    WIDEN_DRAG="145 410 190 410 250 410"
+    LOG_ERRORS_AT_STARTUP_OK=0
+    SHOW_ABOUT=0
+    DIRECTIVE_COMMENT='-- manyfold dev: zone1_prod=zone1_dev2'
+    ;;
+  4.2.0)
+    SQUIRREL_SHA256=d9da62c848a4e954d7b53ba7ff49cc5f1af5fb71aeb3c4e592fed4c203636d51
+    SQUIRREL_URL="https://sourceforge.net/projects/squirrel-sql/files/1-stable/${SQUIRREL_VERSION}/squirrel-sql-${SQUIRREL_VERSION}-standard.jar/download"
+    AUTO_INSTALL_XML=auto-install-4.2.xml
+    SQUIRREL_JAVA_MIN=11
+    SQUIRREL_JAVA_MAX=16
+    VERSION_SHOT_PREFIX="s42-"
+    MAIN_WIN_TITLE='SQuirreL SQL Client Version'
+    SESSION_STRIP_CROP=300x24+34+58
+    TREE_CLICK_H2="110 186"
+    TREE_KEYS_H2_1="Right Down Down Right"
+    TREE_KEYS_H2_2="Down Right"
+    SQL_TAB_CLICK="123 126"
+    DIVIDER_DRAG="700 192 700 250 700 300"
+    EDITOR_CLICK="700 230"
+    WIDEN_DRAG="145 399 190 399 250 399"
+    LOG_ERRORS_AT_STARTUP_OK=1
+    SHOW_ABOUT=1
+    HELP_MENU_CLICK="349 9"
+    ABOUT_ITEM_CLICK="380 57"
+    ABOUT_SYSTEM_TAB_CLICK="722 188"
+    # 4.2.0 always strips "--" line comments before the driver sees them and has no option to stop
+    # that, so the block form of the directive (README "Different schema per backend") is used.
+    # Its "Remove multi line comment" option is switched off in prefs.xml below.
+    DIRECTIVE_COMMENT='/* manyfold dev: zone1_prod=zone1_dev2 */'
+    ;;
+  *)
+    printf '[validation] ERROR: SQUIRREL_VERSION must be 5.1.0 or 4.2.0, got "%s"\n' "$SQUIRREL_VERSION" >&2
+    exit 2
+    ;;
+esac
 
 # ---- pinned vendor JDBC drivers, downloaded for MODE=multi ------------------------------------
 # Downloaded rather than declared in Gradle: the MariaDB driver is LGPL-2.1, which the dependency
@@ -78,12 +142,19 @@ OUT_DIR="${OUT_DIR:-$SCRIPT_DIR/out}"
 CACHE_DIR="${CACHE_DIR:-$SCRIPT_DIR/.cache}"
 BUNDLE_DIR="${BUNDLE_DIR:-$REPO_ROOT/build/client}"
 SQUIRREL_HOME="${SQUIRREL_HOME:-$CACHE_DIR/squirrel-sql-$SQUIRREL_VERSION}"
+SQUIRREL_JAVA_HOME="${SQUIRREL_JAVA_HOME:-}"
+if [ -n "$SQUIRREL_JAVA_HOME" ]; then SQUIRREL_JAVA="$SQUIRREL_JAVA_HOME/bin/java"; else SQUIRREL_JAVA=java; fi
 MODE="${MODE:-h2}"
 case "$MODE" in
   h2) ALIAS_NAME="manyfold-h2-demo"; SHOT_PREFIX="" ;;
   multi) ALIAS_NAME="manyfold-multi-demo"; SHOT_PREFIX="multi-" ;;
   *) printf '[validation] ERROR: MODE must be h2 or multi, got "%s"\n' "$MODE" >&2; exit 2 ;;
 esac
+if [ -n "$VERSION_SHOT_PREFIX" ] && [ "$MODE" != h2 ]; then
+  printf '[validation] ERROR: SQuirreL %s is validated in MODE=h2 only\n' "$SQUIRREL_VERSION" >&2
+  exit 2
+fi
+SHOT_PREFIX="${SHOT_PREFIX}${VERSION_SHOT_PREFIX}"
 DB_HOST_POSTGRES="${DB_HOST_POSTGRES:-localhost}"
 DB_HOST_MARIADB="${DB_HOST_MARIADB:-localhost}"
 DRIVERS_DIR="$CACHE_DIR/drivers"
@@ -110,7 +181,8 @@ cleanup() {
   if [ -n "$WORK_DIR" ] && [ -f "$WORK_DIR/userdir/logs/squirrel-sql.log" ]; then
     cp "$WORK_DIR/userdir/logs/squirrel-sql.log" "$OUT_DIR/squirrel-sql.log" 2>/dev/null || true
   fi
-  [ -n "$SQUIRREL_PID" ] && kill "$SQUIRREL_PID" 2>/dev/null || true
+  # SQuirreL 4.2.0's launcher script does not exec java, so kill the whole process group.
+  [ -n "$SQUIRREL_PID" ] && { kill -- "-$SQUIRREL_PID" 2>/dev/null || kill "$SQUIRREL_PID" 2>/dev/null; } || true
   [ -n "$XVFB_PID" ] && kill "$XVFB_PID" 2>/dev/null || true
   [ -n "$WORK_DIR" ] && rm -rf "$WORK_DIR"
   exit "$status"
@@ -127,7 +199,7 @@ install_squirrel() {
     log "SQuirreL already installed at $SQUIRREL_HOME"
     return
   fi
-  need java
+  need "$SQUIRREL_JAVA"
   need curl
   need sha256sum
   mkdir -p "$CACHE_DIR"
@@ -143,9 +215,9 @@ install_squirrel() {
   [ "$actual" = "$SQUIRREL_SHA256" ] \
     || die "checksum mismatch for $installer: expected $SQUIRREL_SHA256, got $actual"
   log "installing SQuirreL $SQUIRREL_VERSION into $SQUIRREL_HOME"
-  local answers="$CACHE_DIR/auto-install.xml"
-  sed "s#@INSTALL_PATH@#$SQUIRREL_HOME#" "$SCRIPT_DIR/auto-install.xml" >"$answers"
-  java -Djava.awt.headless=true -jar "$installer" "$answers" >"$CACHE_DIR/install.log" 2>&1 \
+  local answers="$CACHE_DIR/$AUTO_INSTALL_XML"
+  sed "s#@INSTALL_PATH@#$SQUIRREL_HOME#" "$SCRIPT_DIR/$AUTO_INSTALL_XML" >"$answers"
+  "$SQUIRREL_JAVA" -Djava.awt.headless=true -jar "$installer" "$answers" >"$CACHE_DIR/install.log" 2>&1 \
     || { tail -20 "$CACHE_DIR/install.log" >&2; die "SQuirreL installer failed"; }
   [ -x "$SQUIRREL_HOME/squirrel-sql.sh" ] || die "installer did not create squirrel-sql.sh"
 }
@@ -175,7 +247,7 @@ if [ "${1:-}" = "--install-only" ]; then
 fi
 
 # ---- preconditions ----------------------------------------------------------------------------
-need java
+need "$SQUIRREL_JAVA"
 need Xvfb
 need xdotool
 need curl
@@ -190,8 +262,11 @@ fi
 CONVERT=""
 if command -v convert >/dev/null 2>&1; then CONVERT=convert; fi
 
-java_major="$(java -version 2>&1 | sed -n 's/.*version "\([0-9]*\).*/\1/p' | head -1)"
-[ "${java_major:-0}" -ge 17 ] || die "JDK 17 or newer is required (found: ${java_major:-unknown})"
+java_version_line="$("$SQUIRREL_JAVA" -version 2>&1 | grep ' version "' | head -1)"
+java_major="$(printf '%s\n' "$java_version_line" | sed -n 's/.*version "\([0-9]*\).*/\1/p')"
+if [ "${java_major:-0}" -lt "$SQUIRREL_JAVA_MIN" ] || [ "${java_major:-0}" -gt "$SQUIRREL_JAVA_MAX" ]; then
+  die "SQuirreL $SQUIRREL_VERSION needs a JVM from $SQUIRREL_JAVA_MIN to $SQUIRREL_JAVA_MAX, $SQUIRREL_JAVA is: ${java_major:-unknown}. Set SQUIRREL_JAVA_HOME."
+fi
 
 case "$SQUIRREL_HOME$OUT_DIR$BUNDLE_DIR" in
   *" "*) die "paths must not contain spaces (SQuirreL's launcher script does not quote them)" ;;
@@ -274,14 +349,17 @@ mkdir -p "$USERDIR"
 
 # SQuirreL strips "--" and "/* */" comments from a statement before it reaches the driver, by
 # default. Schema directives are comments, so both options are switched off (they are under
-# Session Properties > SQL); otherwise the driver never sees the directive.
-cat >"$USERDIR/prefs.xml" <<'EOF'
+# Session Properties > SQL); otherwise the driver never sees the directive. SQuirreL 4.2.0 has
+# only the multi line option (its line comment setting is just the comment marker).
+REMOVE_LINE_COMMENT_PREF="<removeLineComment>false</removeLineComment>"
+if [ "$SQUIRREL_VERSION" = 4.2.0 ]; then REMOVE_LINE_COMMENT_PREF=""; fi
+cat >"$USERDIR/prefs.xml" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <Beans>
     <Bean Class="net.sourceforge.squirrel_sql.client.preferences.SquirrelPreferences">
         <firstRun>false</firstRun>
         <sessionProperties Class="net.sourceforge.squirrel_sql.client.session.properties.SessionProperties">
-            <removeLineComment>false</removeLineComment>
+            $REMOVE_LINE_COMMENT_PREF
             <removeMultiLineComment>false</removeMultiLineComment>
         </sessionProperties>
     </Bean>
@@ -381,11 +459,14 @@ shot() {
 
 click() { xdotool mousemove "$1" "$2" click 1; }
 
+# drag X1 Y1 X2 Y2 X3 Y3: press at the first point, move through the second, release at the third.
+drag() { xdotool mousemove "$1" "$2" mousedown 1 mousemove "$3" "$4" mousemove "$5" "$6" mouseup 1; }
+
 # type_and_run SQL: focus the editor, replace its contents, run with Ctrl+Enter.
 # Mouse clicks are used to give the editor keyboard focus because the bare Xvfb has no window
 # manager to hand out focus.
 type_and_run() {
-  click 700 230
+  click $EDITOR_CLICK
   sleep 0.5
   xdotool key ctrl+a
   xdotool type --delay 20 -- "$1"
@@ -396,7 +477,7 @@ type_and_run() {
 
 # Widen the first result column so "source_database" is readable. Cosmetic only.
 widen_first_column() {
-  xdotool mousemove 145 410 mousedown 1 mousemove 190 410 mousemove 250 410 mouseup 1 || true
+  drag $WIDEN_DRAG || true
   sleep 0.5
 }
 
@@ -404,7 +485,7 @@ session_strip_colors() {
   [ -n "$CONVERT" ] || { echo -1; return; }
   local tmp="$WORK_DIR/strip.png"
   shot_raw "$tmp"
-  "$CONVERT" "$tmp" -crop 300x24+34+58 +repage -format %k info: 2>/dev/null || echo 0
+  "$CONVERT" "$tmp" -crop "$SESSION_STRIP_CROP" +repage -format %k info: 2>/dev/null || echo 0
 }
 
 error_window_exists() {
@@ -423,12 +504,13 @@ fail() { FAILURES+=("$1"); log "FAIL: $1"; }
 # --squirrel-home for the install directory.
 log "starting SQuirreL SQL $SQUIRREL_VERSION"
 JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-}" \
+  setsid ${SQUIRREL_JAVA_HOME:+env JAVA_HOME="$SQUIRREL_JAVA_HOME"} \
   "$SQUIRREL_HOME/squirrel-sql.sh" -userdir "$USERDIR" -nos >"$WORK_DIR/squirrel.out" 2>&1 &
 SQUIRREL_PID=$!
 
 MAIN_WIN=""
 for _ in $(seq 1 90); do
-  MAIN_WIN="$(xdotool search --onlyvisible --name 'SQuirreL SQL Client / Version' 2>/dev/null | head -1 || true)"
+  MAIN_WIN="$(xdotool search --onlyvisible --name "$MAIN_WIN_TITLE" 2>/dev/null | head -1 || true)"
   [ -n "$MAIN_WIN" ] && break
   kill -0 "$SQUIRREL_PID" 2>/dev/null || { tail -20 "$WORK_DIR/squirrel.out" >&2; die "SQuirreL exited during startup"; }
   sleep 1
@@ -469,6 +551,14 @@ else
   fail "session window did not appear within 90 s"
 fi
 error_window_exists && fail "an Error window is open right after connecting"
+# SQuirreL 4.2.0 logs one ERROR at every start, on Linux, for the Windows look and feel it cannot
+# load (NoClassDefFoundError for WindowsLookAndFeel). It is not a driver problem, so errors
+# already in the log here are the baseline and only new ones fail the run.
+STARTUP_LOG_ERRORS=0
+if [ "$LOG_ERRORS_AT_STARTUP_OK" -eq 1 ]; then
+  STARTUP_LOG_ERRORS="$(log_error_count)"
+  NOTES+=("log: $STARTUP_LOG_ERRORS ERROR line(s) at SQuirreL startup are ignored as a baseline")
+fi
 
 shot connected "Objects tab right after auto-connect: session tab $ALIAS_NAME is open, no dialog"
 
@@ -484,20 +574,20 @@ if [ "$MODE" = multi ]; then
   xdotool key Down Down Down Down Down Down Down Down Down Right
   sleep 2
 else
-  click 110 186
+  click $TREE_CLICK_H2
   sleep 0.5
-  xdotool key Right Down Down Right
+  xdotool key $TREE_KEYS_H2_1
   sleep 1.5
-  xdotool key Down Right
+  xdotool key $TREE_KEYS_H2_2
   sleep 2
 fi
 shot objects-tree "Objects tab with the tree expanded down to the tables (comes from the first backend)"
 
 # Switch to the SQL tab (mouse; keeps working without a window manager), and give the editor
 # more room by dragging the divider down.
-click 123 126
+click $SQL_TAB_CLICK
 sleep 1.5
-xdotool mousemove 700 192 mousedown 1 mousemove 700 250 mousemove 700 300 mouseup 1
+drag $DIVIDER_DRAG
 sleep 1
 
 type_and_run "SELECT * FROM orders ORDER BY id"
@@ -523,7 +613,7 @@ if [ "$MODE" = multi ]; then
 fi
 
 error_window_exists && fail "an Error window is open after the SELECT statements"
-errors_after_selects="$(log_error_count)"
+errors_after_selects="$(( $(log_error_count) - STARTUP_LOG_ERRORS ))"
 [ "$errors_after_selects" -eq 0 ] || fail "squirrel-sql.log has $errors_after_selects ERROR lines after the SELECTs"
 
 type_and_run "DELETE FROM orders"
@@ -556,16 +646,35 @@ if [ "$MODE" = multi ]; then
   shot schema-directive "two directive comments then SELECT * FROM zone1_prod.orders ORDER BY id: postgres 20 as written, mariadb 10 and 11 from zone1_dev2, h2 5 from ZONE1_DEV2"
 else
   type_and_run "$(printf '%s\n%s' \
-    '-- manyfold dev: zone1_prod=zone1_dev2' \
+    "$DIRECTIVE_COMMENT" \
     'SELECT * FROM zone1_prod.orders ORDER BY id')"
   widen_first_column
-  shot schema-directive "-- manyfold dev: zone1_prod=zone1_dev2 then SELECT * FROM zone1_prod.orders ORDER BY id: prod 1 alice, prod 2 bob, dev 3 carol (dev read zone1_dev2), source_database first"
+  shot schema-directive "$DIRECTIVE_COMMENT then SELECT * FROM zone1_prod.orders ORDER BY id: prod 1 alice, prod 2 bob, dev 3 carol (dev read zone1_dev2), source_database first"
 
   # Without the directive dev gets zone1_prod.orders as written and has no such schema: the GUI
   # shows a failure naming backend 'dev'. Expected, so it is only recorded.
   type_and_run "SELECT * FROM zone1_prod.orders ORDER BY id"
-  shot schema-directive-missing "same SELECT without the directive: the error pane shows H2's 'Schema \"ZONE1_PROD\" not found', raised by backend dev (SQuirreL shows only the deepest cause, so the 'Backend dev failed:' wrapper is not visible); this is why the directive is needed"
+  if [ "$SQUIRREL_VERSION" = 4.2.0 ]; then
+    # 4.2.0 shows the whole message, including the driver's wrapper.
+    shot schema-directive-missing "same SELECT without the directive: the error pane shows \"Backend 'dev' failed: Schema \"ZONE1_PROD\" not found\", raised by backend dev; this is why the directive is needed"
+  else
+    shot schema-directive-missing "same SELECT without the directive: the error pane shows H2's 'Schema \"ZONE1_PROD\" not found', raised by backend dev (SQuirreL shows only the deepest cause, so the 'Backend dev failed:' wrapper is not visible); this is why the directive is needed"
+  fi
   NOTES+=("schema-directive-missing: failure from backend 'dev' is expected (informational)")
+fi
+
+# ---- Help > About (SQuirreL 4.2.0 only) ---------------------------------------------------------
+# There is no window manager, so no title bar shows the version. The About box does.
+if [ "$SHOW_ABOUT" -eq 1 ]; then
+  SQUIRREL_JVM_EXPECT="$(printf '%s\n' "$java_version_line" | sed -n 's/.*version "\([^"]*\)".*/\1/p')"
+  click $HELP_MENU_CLICK
+  sleep 1
+  click $ABOUT_ITEM_CLICK
+  sleep 2
+  shot about "Help > About: the About box names SQuirreL SQL Client Version $SQUIRREL_VERSION, so the screenshots above are from that version"
+  click $ABOUT_SYSTEM_TAB_CLICK
+  sleep 1.5
+  shot about-system "About > System tab: java.version and java.home of the JVM SQuirreL is running on (expect $SQUIRREL_JVM_EXPECT)"
 fi
 
 # ---- final checks -----------------------------------------------------------------------------
@@ -581,11 +690,19 @@ for f in "${SHOTS[@]}"; do
   prev="$f"
 done
 
+# The JVM SQuirreL really ran on: its own log prints java.version at startup.
+SQUIRREL_JVM_VERSION="$(sed -n 's/.* - java\.version: //p' "$USERDIR/logs/squirrel-sql.log" 2>/dev/null | head -1)"
+SQUIRREL_JVM_SOURCE="from squirrel-sql.log"
+if [ -z "$SQUIRREL_JVM_VERSION" ]; then
+  SQUIRREL_JVM_VERSION="${java_version_line:-unknown}"
+  SQUIRREL_JVM_SOURCE="from java -version of $SQUIRREL_JAVA, not confirmed by the log"
+fi
+
 if [ "${#FAILURES[@]}" -eq 0 ]; then VERDICT=PASS; else VERDICT=FAIL; fi
 {
   echo "$VERDICT"
   echo "mode: $MODE"
-  echo "SQuirreL SQL $SQUIRREL_VERSION, manyfold jar $(basename "$MANYFOLD_JAR"), backend $(basename "$H2_JAR")"
+  echo "SQuirreL SQL $SQUIRREL_VERSION on JVM java.version $SQUIRREL_JVM_VERSION ($SQUIRREL_JVM_SOURCE), manyfold jar $(basename "$MANYFOLD_JAR"), backend $(basename "$H2_JAR")"
   for j in "${EXTRA_JARS[@]:-}"; do [ -n "$j" ] && echo "backend jar: $(basename "$j")"; done
   for n in "${NOTES[@]}"; do echo "check: $n"; done
   for f in "${FAILURES[@]:-}"; do [ -n "$f" ] && echo "FAILED: $f"; done

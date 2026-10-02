@@ -9,6 +9,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -36,14 +37,64 @@ public final class Directives {
 
   private Directives() {}
 
-  /**
-   * The outcome of reading directives.
-   *
-   * @param sql the statement with the directive comments removed
-   * @param substitutions per backend in URL order: source identifier to replacement, each as
-   *     written in the directive, the replacement being empty for a deletion
-   */
-  public record Parsed(String sql, List<Map<String, String>> substitutions) {}
+  /** The outcome of reading directives. */
+  public static final class Parsed {
+    private final String sql;
+    private final List<Map<String, String>> substitutions;
+
+    /**
+     * Creates the outcome.
+     *
+     * @param sql the statement with the directive comments removed
+     * @param substitutions per backend in URL order: source identifier to replacement, each as
+     *     written in the directive, the replacement being empty for a deletion
+     */
+    public Parsed(String sql, List<Map<String, String>> substitutions) {
+      this.sql = sql;
+      this.substitutions = substitutions;
+    }
+
+    /**
+     * The stripped statement.
+     *
+     * @return the statement with the directive comments removed
+     */
+    public String sql() {
+      return sql;
+    }
+
+    /**
+     * The substitutions.
+     *
+     * @return per backend in URL order: source identifier to replacement, the replacement being
+     *     empty for a deletion
+     */
+    public List<Map<String, String>> substitutions() {
+      return substitutions;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+      if (this == o) {
+        return true;
+      }
+      if (!(o instanceof Parsed)) {
+        return false;
+      }
+      Parsed other = (Parsed) o;
+      return sql.equals(other.sql) && substitutions.equals(other.substitutions);
+    }
+
+    @Override
+    public int hashCode() {
+      return Objects.hash(sql, substitutions);
+    }
+
+    @Override
+    public String toString() {
+      return "Parsed[sql=" + sql + ", substitutions=" + substitutions + "]";
+    }
+  }
 
   /**
    * Reads the directives of a statement.

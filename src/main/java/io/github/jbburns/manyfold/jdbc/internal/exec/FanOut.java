@@ -149,7 +149,7 @@ public final class FanOut implements AutoCloseable {
       } catch (ExecutionException e) {
         results.add(null);
         Throwable cause = e.getCause();
-        failures.add(cause instanceof WrappedError w ? w.getCause() : cause);
+        failures.add(cause instanceof WrappedError ? cause.getCause() : cause);
       } catch (CancellationException e) {
         cancelAll(futures);
         throw closedException();
@@ -226,8 +226,8 @@ public final class FanOut implements AutoCloseable {
       if (failure == null) {
         continue;
       }
-      if (failure instanceof Error error) {
-        throw error;
+      if (failure instanceof Error) {
+        throw (Error) failure;
       }
       SQLException wrapped =
           ManyfoldException.backendFailed(
@@ -253,9 +253,10 @@ public final class FanOut implements AutoCloseable {
   private static <T extends @Nullable Object> void closeHealthyResults(
       List<@Nullable Throwable> failures, List<T> results, SQLException thrown) {
     for (int i = 0; i < failures.size() && i < results.size(); i++) {
-      if (failures.get(i) == null && results.get(i) instanceof AutoCloseable closeable) {
+      T result = results.get(i);
+      if (failures.get(i) == null && result instanceof AutoCloseable) {
         try {
-          closeable.close();
+          ((AutoCloseable) result).close();
         } catch (Exception e) {
           thrown.addSuppressed(e);
         }
@@ -331,8 +332,8 @@ public final class FanOut implements AutoCloseable {
       // shutdownNow drops queued tasks without completing their futures, which would leave a
       // waiting thread blocked forever. Cancel them so every waiter is released.
       for (Runnable queued : pool.shutdownNow()) {
-        if (queued instanceof Future<?> future) {
-          future.cancel(false);
+        if (queued instanceof Future<?>) {
+          ((Future<?>) queued).cancel(false);
         }
       }
     }

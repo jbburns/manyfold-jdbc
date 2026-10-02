@@ -26,8 +26,9 @@ jobs:
       - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
-          # Both are installed: 21 builds, 17 runs the test17 task. The last entry becomes JAVA_HOME.
+          # All are installed: 21 builds, 11 and 17 run the test11 and test17 tasks. The last entry becomes JAVA_HOME.
           java-version: |
+            11
             17
             21
 
@@ -39,7 +40,7 @@ jobs:
       - name: Build, lint and test
         run: ./gradlew build --no-daemon
         env:
-          ORG_GRADLE_PROJECT_org.gradle.java.installations.fromEnv: JAVA_HOME_17_X64,JAVA_HOME_21_X64
+          ORG_GRADLE_PROJECT_org.gradle.java.installations.fromEnv: JAVA_HOME_11_X64,JAVA_HOME_17_X64,JAVA_HOME_21_X64
 
       - name: Upload test reports
         if: failure()
