@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!--
+  IzPack auto-install answers for the SQuirreL SQL 4.2.0 installer jar. That installer is built
+  with an older IzPack whose panel classes live in com.izforge.izpack.panels (no sub-packages),
+  so auto-install.xml (for 5.x) cannot be reused. Pack names are the same: Base and Standard.
+  run.sh replaces @INSTALL_PATH@ with the real target directory before use.
+-->
+<AutomatedInstallation langpack="eng">
+    <com.izforge.izpack.panels.HelloPanel/>
+    <com.izforge.izpack.panels.HTMLInfoPanel/>
+    <com.izforge.izpack.panels.TargetPanel>
+        <installpath>@INSTALL_PATH@</installpath>
+    </com.izforge.izpack.panels.TargetPanel>
+    <com.izforge.izpack.panels.PacksPanel>
+        <pack index="0" name="Base" selected="true"/>
+        <pack index="1" name="Standard" selected="true"/>
+    </com.izforge.izpack.panels.PacksPanel>
+    <com.izforge.izpack.panels.InstallPanel/>
+    <com.izforge.izpack.panels.ShortcutPanel>
+        <createMenuShortcuts>false</createMenuShortcuts>
+        <programGroup>SQuirreL SQL Client</programGroup>
+        <createDesktopShortcuts>false</createDesktopShortcuts>
+        <createStartupShortcuts>false</createStartupShortcuts>
+        <shortcutType>user</shortcutType>
+    </com.izforge.izpack.panels.ShortcutPanel>
+    <com.izforge.izpack.panels.FinishPanel/>
+</AutomatedInstallation>

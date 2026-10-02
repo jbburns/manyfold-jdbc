@@ -253,6 +253,16 @@ io.github.jbburns.manyfold.jdbc.ManyfoldDriver
 
 The object tree and autocomplete are populated from the first backend in the URL.
 
+SQuirreL SQL 4.2 on Java 11 to 16 is supported and was validated: the harness in
+[validation/](validation/README.md) drove SQuirreL 4.2.0 on a Java 14 JVM through the same steps
+(connect, object tree, `SELECT`, refused `DELETE`, schema directive).
+
+![SQuirreL SQL 4.2.0 on Java 14 showing one SELECT returning rows from prod and dev with a source_database column](docs/images/squirrel-4-2-java-14.png)
+
+SQuirreL 4.2 has only the *Remove multi line comment* option. It always removes `--` comments, so
+write a [schema directive](#different-schema-per-backend) there in the block form,
+`/* manyfold dev2: zone1_prod=zone1_dev2 */`, with that option unticked.
+
 ### DBeaver
 
 1. **Database → Driver Manager → New**.

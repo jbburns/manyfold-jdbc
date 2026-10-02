@@ -30,13 +30,14 @@ COPY --from=builder /src/build/client /opt/client
 # Install SQuirreL and download the MariaDB and PostgreSQL JDBC jars (used by MODE=multi) at build
 # time with the same script the container runs later. Only the installer jar is deleted afterwards;
 # the vendor jars stay in /opt/cache/drivers.
-# run.sh pins SQUIRREL_VERSION itself; the ARG only has to match it, so fail if it does not.
+# run.sh defaults SQUIRREL_VERSION itself; the ARG only has to match that default, so fail if it
+# does not. The image holds the default version only (SQuirreL 4.2.0 is not baked in).
 ENV CACHE_DIR=/opt/cache \
     SQUIRREL_HOME=/opt/squirrel-sql \
     BUNDLE_DIR=/opt/client \
     OUT_DIR=/out \
     SKIP_BUILD=1
-RUN grep -q "^SQUIRREL_VERSION=${SQUIRREL_VERSION}\$" validation/run.sh \
+RUN grep -q "^SQUIRREL_VERSION=\"\${SQUIRREL_VERSION:-${SQUIRREL_VERSION}}\"\$" validation/run.sh \
  && chmod +x validation/run.sh \
  && validation/run.sh --install-only \
  && rm -f /opt/cache/squirrel-sql-*-standard.jar

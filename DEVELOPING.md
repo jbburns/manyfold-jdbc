@@ -232,6 +232,47 @@ the number shown by `pg_lsclusters`.
 
 Set `DB_HOST_POSTGRES` and `DB_HOST_MARIADB` if the servers are not on `localhost`.
 
+### SQuirreL SQL 4.2.0 on Java 14
+
+The driver's floor is Java 11, but SQuirreL SQL 5.x itself needs Java 17. To prove the driver in
+the oldest SQuirreL it supports, on a JVM that SQuirreL 4.2 accepts (Java 8 to 16, and the driver
+needs 11 or newer), set two environment variables:
+
+```
+SQUIRREL_VERSION=4.2.0 SQUIRREL_JAVA_HOME=/path/to/jdk14 validation/run.sh
+```
+
+`SQUIRREL_VERSION` is `5.1.0` by default (and `4.2.0` is the only other value);
+`SQUIRREL_JAVA_HOME` is the JDK that installs and launches SQuirreL, and defaults to the `java`
+on the `PATH`. `run.sh` refuses a JVM outside the range the chosen version supports (17 or newer
+for 5.1.0, 11 to 16 for 4.2.0). Screenshots are `s42-NN-<label>.png`, h2 mode only.
+
+The 4.2.0 installer is not on GitHub. `run.sh` downloads `squirrel-sql-4.2.0-standard.jar` from
+SourceForge and verifies its SHA-256, and installs it with `validation/auto-install-4.2.xml`
+(an older IzPack, so the panel class names differ from `auto-install.xml`). JDK 14 was never
+published by Temurin. Take it from the Foojay Disco API, the source Gradle's toolchain plugin
+uses, for example Azul Zulu:
+
+```
+curl -sS "https://api.foojay.io/disco/v3.0/packages?version=14&distribution=zulu&operating_system=linux&architecture=x64&archive_type=tar.gz&package_type=jdk&javafx_bundled=false&latest=available"
+```
+
+Download the `links.pkg_download_redirect` of the entry whose `lib_c_type` is `glibc`, unpack it,
+for example under `validation/.cache/jdk14/` (git-ignored), and point `SQUIRREL_JAVA_HOME` at it.
+Any JDK from 11 to 16 works, for example the JDK 11 that Gradle provisions under `~/.gradle/jdks`.
+
+What differs from 5.1.0, all handled by the version block at the top of `run.sh`: the download
+and checksum, the installer answers, the main window title (`SQuirreL SQL Client Version 4.2.0`),
+the 4.2.0 launcher script (it does not `exec` java, so the harness kills the process group, and it
+takes the JVM from `JAVA_HOME`), a settings key (4.2.0 has no `removeLineComment`), a startup
+ERROR line about the Windows look and feel that the log check ignores as a baseline, the column
+header row used to widen the first column, and the schema-directive step. 4.2.0 always strips
+`--` comments before the driver sees them, so the harness sends the block form
+`/* manyfold dev: zone1_prod=zone1_dev2 */` with *Remove multi line comment* off. The run ends with
+Help > About (`s42-09-about.png`) and its System tab (`s42-10-about-system.png`), because without a
+window manager no title bar shows the version or the JVM. `RESULT.txt` records the SQuirreL version
+and the `java.version` that SQuirreL's own log reports.
+
 ### The Docker way
 
 The image installs the tools, the driver bundle, SQuirreL and both vendor jars at build time, so
@@ -261,6 +302,7 @@ In `validation/out/`. It is git-ignored apart from `.gitkeep`.
 |---|---|
 | `NN-<label>.png` | Screenshots from h2 mode, for example `03-select-all.png`. |
 | `multi-NN-<label>.png` | Screenshots from multi mode, for example `multi-03-select-all.png`. |
+| `s42-NN-<label>.png` | Screenshots from SQuirreL 4.2.0, for example `s42-03-select-all.png`. |
 | `RESULT.txt` | `PASS` or `FAIL`, the mode, the jars used, the checks made and one line per screenshot. |
 | `squirrel-sql.log` | SQuirreL's own log. |
 
@@ -295,7 +337,7 @@ again.
 ### Known fragility
 
 The harness clicks at fixed pixel positions on a 1600x1000 virtual screen, laid out for SQuirreL
-SQL 5.1.0. There is no window manager and no accessibility hook. So:
+SQL 5.1.0 and 4.2.0 (the positions are set per version at the top of `validation/run.sh`). There is no window manager and no accessibility hook. So:
 
 - A different SQuirreL version, a different font, or a different screen size can move a button
   or a tab, and the clicks then land on the wrong thing. The symptoms are screenshots of the
