@@ -54,11 +54,11 @@ public final class StubDriver implements Driver, AutoCloseable {
       return null;
     }
     Object outcome = outcomes.get(url.substring(prefix.length()));
-    if (outcome instanceof SQLException e) {
-      throw e;
+    if (outcome instanceof SQLException) {
+      throw (SQLException) outcome;
     }
-    if (outcome instanceof RuntimeException e) {
-      throw e;
+    if (outcome instanceof RuntimeException) {
+      throw (RuntimeException) outcome;
     }
     return (Connection) outcome;
   }

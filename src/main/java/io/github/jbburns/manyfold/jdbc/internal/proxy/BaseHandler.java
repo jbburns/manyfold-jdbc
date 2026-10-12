@@ -23,26 +23,32 @@ abstract class BaseHandler implements InvocationHandler {
       throws Throwable {
     Object[] arguments = args == null ? NO_ARGS : args;
     if (method.getDeclaringClass() == Object.class) {
-      return switch (method.getName()) {
-        case "equals" -> proxy == arguments[0];
-        case "hashCode" -> System.identityHashCode(proxy);
-        default -> describe();
-      };
+      switch (method.getName()) {
+        case "equals":
+          return proxy == arguments[0];
+        case "hashCode":
+          return System.identityHashCode(proxy);
+        default:
+          return describe();
+      }
     }
     switch (method.getName()) {
-      case "unwrap" -> {
-        Class<?> iface = (Class<?>) arguments[0];
-        if (iface.isInstance(proxy)) {
-          return proxy;
+      case "unwrap":
+        {
+          Class<?> iface = (Class<?>) arguments[0];
+          if (iface.isInstance(proxy)) {
+            return proxy;
+          }
+          throw new SQLException(describe() + " is not a wrapper for " + iface.getName());
         }
-        throw new SQLException(describe() + " is not a wrapper for " + iface.getName());
-      }
-      case "isWrapperFor" -> {
-        return ((Class<?>) arguments[0]).isInstance(proxy);
-      }
-      default -> {
-        return dispatch(method, arguments);
-      }
+      case "isWrapperFor":
+        {
+          return ((Class<?>) arguments[0]).isInstance(proxy);
+        }
+      default:
+        {
+          return dispatch(method, arguments);
+        }
     }
   }
 

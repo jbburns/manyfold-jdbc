@@ -10,7 +10,7 @@ commands. Read it before opening a pull request.
 ## Commands
 
 ```
-./gradlew build                      # everything CI runs: format check, static analysis, tests on 17 and 21
+./gradlew build                      # everything CI runs: format check, static analysis, tests on 11, 17 and 21
 ./gradlew spotlessApply              # fix formatting (google-java-format)
 ./gradlew test                       # tests on the build JDK only
 ./gradlew --write-verification-metadata sha256 build   # after any dependency version change
@@ -21,7 +21,7 @@ Releases: push a tag `vX.Y.Z` after adding a `## [X.Y.Z]` section to CHANGELOG.m
 RELEASING.md. Never put credentials anywhere in the repository; the release job reads them from
 GitHub environment secrets only.
 
-Requires JDK 21 to build. Bytecode targets Java 17. Gradle provisions a JDK 17 for `test17`.
+Requires JDK 21 to build. Bytecode targets Java 11. Gradle provisions JDKs 11 and 17 for test11 and test17.
 
 ## Invariants
 

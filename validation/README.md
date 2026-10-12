@@ -12,6 +12,7 @@ The quick version:
 ```
 validation/run.sh                 # two H2 databases, no server needed
 MODE=multi validation/run.sh      # PostgreSQL, MariaDB and H2, start the servers first
+SQUIRREL_VERSION=4.2.0 SQUIRREL_JAVA_HOME=/path/to/jdk14 validation/run.sh   # SQuirreL 4.2.0 on Java 14, s42-* screenshots
 ```
 
 Files here:
@@ -19,7 +20,8 @@ Files here:
 | File | Purpose |
 |---|---|
 | `run.sh` | The harness. Pinned SQuirreL and vendor driver versions and checksums are at the top. |
-| `auto-install.xml` | Silent install answers for the SQuirreL installer. |
+| `auto-install.xml` | Silent install answers for the SQuirreL 5.1.0 installer. |
+| `auto-install-4.2.xml` | The same for the SQuirreL 4.2.0 installer (older IzPack). |
 | `Dockerfile` | Image with the harness and all downloads baked in. |
 | `docker-compose.yml` | MariaDB, PostgreSQL and the harness in multi mode. |
 | `db/*-init.sql` | Seed tables for the two servers. |

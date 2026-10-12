@@ -6,7 +6,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- The driver now runs on Java 11 and newer (previously 17). No API change.
 
 ## [0.1.0] - 2026-09-30
 

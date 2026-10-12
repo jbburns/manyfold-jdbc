@@ -114,105 +114,122 @@ final class ConnectionHandler extends BaseHandler {
   @Override
   protected @Nullable Object dispatch(Method method, Object[] args) throws Throwable {
     switch (method.getName()) {
-      case "createStatement" -> {
-        return createStatement(Statement.class, method, args, false);
-      }
-      case "prepareStatement" -> {
-        return createStatement(PreparedStatement.class, method, args, true);
-      }
-      case "prepareCall" -> {
-        return createStatement(CallableStatement.class, method, args, true);
-      }
-      case "getMetaData" -> {
-        return Proxies.databaseMetaData(primary().getMetaData(), this);
-      }
-      case "close" -> {
-        close();
-        return null;
-      }
-      case "isClosed" -> {
-        return closed || primary().isClosed();
-      }
-      case "abort" -> {
-        if (closed) {
+      case "createStatement":
+        {
+          return createStatement(Statement.class, method, args, false);
+        }
+      case "prepareStatement":
+        {
+          return createStatement(PreparedStatement.class, method, args, true);
+        }
+      case "prepareCall":
+        {
+          return createStatement(CallableStatement.class, method, args, true);
+        }
+      case "getMetaData":
+        {
+          return Proxies.databaseMetaData(primary().getMetaData(), this);
+        }
+      case "close":
+        {
+          close();
           return null;
         }
-        try {
-          fanOut.sequential(connections, c -> call(method, c, args));
-        } finally {
-          closed = true;
-          fanOut.close();
+      case "isClosed":
+        {
+          return closed || primary().isClosed();
         }
-        return null;
-      }
-      case "isValid" -> {
-        if (closed) {
-          return false;
+      case "abort":
+        {
+          if (closed) {
+            return null;
+          }
+          try {
+            fanOut.sequential(connections, c -> call(method, c, args));
+          } finally {
+            closed = true;
+            fanOut.close();
+          }
+          return null;
         }
-        for (Boolean valid :
-            fanOut.sequential(
-                connections, c -> Objects.requireNonNull((Boolean) call(method, c, args)))) {
-          if (!Boolean.TRUE.equals(valid)) {
+      case "isValid":
+        {
+          if (closed) {
             return false;
           }
-        }
-        return true;
-      }
-      case "setReadOnly" -> {
-        if (options.readOnly() && !Boolean.TRUE.equals(args[0])) {
-          return null;
-        }
-        fanOut.sequential(connections, c -> call(method, c, args));
-        return null;
-      }
-      case "getWarnings" -> {
-        List<SQLWarning> ours = openWarnings;
-        SQLWarning primaryWarnings = primary().getWarnings();
-        if (ours.isEmpty()) {
-          return primaryWarnings;
-        }
-        // The last of our own warnings points at whatever the primary reports right now.
-        ours.get(ours.size() - 1).setNextWarning(primaryWarnings);
-        return ours.get(0);
-      }
-      case "clearWarnings" -> {
-        openWarnings = List.of();
-        fanOut.sequential(connections, c -> call(method, c, args));
-        return null;
-      }
-      case "isReadOnly" -> {
-        return options.readOnly() || primary().isReadOnly();
-      }
-      case "setSavepoint" -> {
-        List<Savepoint> savepoints =
-            fanOut.sequential(
-                connections, c -> Objects.requireNonNull((Savepoint) call(method, c, args)));
-        return new ManyfoldSavepoint(savepoints);
-      }
-      case "rollback", "releaseSavepoint" -> {
-        if (args.length == 1 && args[0] instanceof ManyfoldSavepoint savepoint) {
-          List<Savepoint> parts = savepoint.savepoints();
-          List<Integer> indexes = new ArrayList<>();
-          for (int i = 0; i < connections.size(); i++) {
-            indexes.add(i);
+          for (Boolean valid :
+              fanOut.sequential(
+                  connections, c -> Objects.requireNonNull((Boolean) call(method, c, args)))) {
+            if (!Boolean.TRUE.equals(valid)) {
+              return false;
+            }
           }
-          fanOut.sequential(
-              indexes, i -> call(method, connections.get(i), new Object[] {parts.get(i)}));
-          return null;
+          return true;
         }
-        if (args.length == 1) {
-          throw new SQLException("Savepoint was not created by this connection");
-        }
-        fanOut.sequential(connections, c -> call(method, c, args));
-        return null;
-      }
-      default -> {
-        if (method.getReturnType() == void.class) {
+      case "setReadOnly":
+        {
+          if (options.readOnly() && !Boolean.TRUE.equals(args[0])) {
+            return null;
+          }
           fanOut.sequential(connections, c -> call(method, c, args));
           return null;
         }
-        return call(method, primary(), args);
-      }
+      case "getWarnings":
+        {
+          List<SQLWarning> ours = openWarnings;
+          SQLWarning primaryWarnings = primary().getWarnings();
+          if (ours.isEmpty()) {
+            return primaryWarnings;
+          }
+          // The last of our own warnings points at whatever the primary reports right now.
+          ours.get(ours.size() - 1).setNextWarning(primaryWarnings);
+          return ours.get(0);
+        }
+      case "clearWarnings":
+        {
+          openWarnings = List.of();
+          fanOut.sequential(connections, c -> call(method, c, args));
+          return null;
+        }
+      case "isReadOnly":
+        {
+          return options.readOnly() || primary().isReadOnly();
+        }
+      case "setSavepoint":
+        {
+          List<Savepoint> savepoints =
+              fanOut.sequential(
+                  connections, c -> Objects.requireNonNull((Savepoint) call(method, c, args)));
+          return new ManyfoldSavepoint(savepoints);
+        }
+      case "rollback":
+      case "releaseSavepoint":
+        {
+          if (args.length == 1 && args[0] instanceof ManyfoldSavepoint) {
+            ManyfoldSavepoint savepoint = (ManyfoldSavepoint) args[0];
+            List<Savepoint> parts = savepoint.savepoints();
+            List<Integer> indexes = new ArrayList<>();
+            for (int i = 0; i < connections.size(); i++) {
+              indexes.add(i);
+            }
+            fanOut.sequential(
+                indexes, i -> call(method, connections.get(i), new Object[] {parts.get(i)}));
+            return null;
+          }
+          if (args.length == 1) {
+            throw new SQLException("Savepoint was not created by this connection");
+          }
+          fanOut.sequential(connections, c -> call(method, c, args));
+          return null;
+        }
+      default:
+        {
+          if (method.getReturnType() == void.class) {
+            fanOut.sequential(connections, c -> call(method, c, args));
+            return null;
+          }
+          return call(method, primary(), args);
+        }
     }
   }
 

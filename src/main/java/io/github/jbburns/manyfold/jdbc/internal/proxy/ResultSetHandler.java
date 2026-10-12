@@ -118,81 +118,102 @@ final class ResultSetHandler extends BaseHandler {
           ManyfoldException.STATE_FEATURE_NOT_SUPPORTED);
     }
     switch (name) {
-      case "next" -> {
-        return next();
-      }
-      case "close" -> {
-        close();
-        return null;
-      }
-      case "isClosed" -> {
-        return closed;
-      }
-      case "wasNull" -> {
-        return !lastReadWasSource && current().wasNull();
-      }
-      case "getMetaData" -> {
-        ResultSetMetaData meta = cursors.get(0).getMetaData();
-        return new ManyfoldResultSetMetaData(meta, sourceColumn, sourceWidth);
-      }
-      case "getStatement" -> {
-        return statement;
-      }
-      case "findColumn" -> {
-        String label = requireLabel((String) args[0]);
-        if (label.equalsIgnoreCase(sourceColumn)) {
-          return 1;
+      case "next":
+        {
+          return next();
         }
-        return (Integer) Objects.requireNonNull(callCurrent(method, args)) + 1;
-      }
-      case "getRow" -> {
-        return Math.toIntExact(Math.min(row, Integer.MAX_VALUE));
-      }
-      case "isBeforeFirst" -> {
-        return !started;
-      }
-      case "isAfterLast" -> {
-        return afterLast;
-      }
-      case "isFirst" -> {
-        return row == 1 && !afterLast;
-      }
-      case "getType" -> {
-        return ResultSet.TYPE_FORWARD_ONLY;
-      }
-      case "getConcurrency" -> {
-        return ResultSet.CONCUR_READ_ONLY;
-      }
-      case "getFetchDirection" -> {
-        return ResultSet.FETCH_FORWARD;
-      }
-      case "setFetchDirection" -> {
-        if (!Integer.valueOf(ResultSet.FETCH_FORWARD).equals(args[0])) {
-          throw new SQLFeatureNotSupportedException(
-              "Only FETCH_FORWARD is supported", ManyfoldException.STATE_FEATURE_NOT_SUPPORTED);
+      case "close":
+        {
+          close();
+          return null;
         }
-        return null;
-      }
-      case "rowUpdated", "rowInserted", "rowDeleted" -> {
-        return false;
-      }
-      case "setFetchSize", "clearWarnings" -> {
-        for (ResultSet cursor : cursors) {
-          call(method, cursor, args);
+      case "isClosed":
+        {
+          return closed;
         }
-        return null;
-      }
-      default -> {
-        if (name.startsWith("get") && args.length > 0) {
-          if (args[0] instanceof Integer column) {
-            return getByIndex(method, args, column);
+      case "wasNull":
+        {
+          return !lastReadWasSource && current().wasNull();
+        }
+      case "getMetaData":
+        {
+          ResultSetMetaData meta = cursors.get(0).getMetaData();
+          return new ManyfoldResultSetMetaData(meta, sourceColumn, sourceWidth);
+        }
+      case "getStatement":
+        {
+          return statement;
+        }
+      case "findColumn":
+        {
+          String label = requireLabel((String) args[0]);
+          if (label.equalsIgnoreCase(sourceColumn)) {
+            return 1;
           }
-          if (method.getParameterTypes()[0] == String.class) {
-            return getByLabel(method, args, requireLabel((String) args[0]));
-          }
+          return (Integer) Objects.requireNonNull(callCurrent(method, args)) + 1;
         }
-        return call(method, current(), args);
-      }
+      case "getRow":
+        {
+          return Math.toIntExact(Math.min(row, Integer.MAX_VALUE));
+        }
+      case "isBeforeFirst":
+        {
+          return !started;
+        }
+      case "isAfterLast":
+        {
+          return afterLast;
+        }
+      case "isFirst":
+        {
+          return row == 1 && !afterLast;
+        }
+      case "getType":
+        {
+          return ResultSet.TYPE_FORWARD_ONLY;
+        }
+      case "getConcurrency":
+        {
+          return ResultSet.CONCUR_READ_ONLY;
+        }
+      case "getFetchDirection":
+        {
+          return ResultSet.FETCH_FORWARD;
+        }
+      case "setFetchDirection":
+        {
+          if (!Integer.valueOf(ResultSet.FETCH_FORWARD).equals(args[0])) {
+            throw new SQLFeatureNotSupportedException(
+                "Only FETCH_FORWARD is supported", ManyfoldException.STATE_FEATURE_NOT_SUPPORTED);
+          }
+          return null;
+        }
+      case "rowUpdated":
+      case "rowInserted":
+      case "rowDeleted":
+        {
+          return false;
+        }
+      case "setFetchSize":
+      case "clearWarnings":
+        {
+          for (ResultSet cursor : cursors) {
+            call(method, cursor, args);
+          }
+          return null;
+        }
+      default:
+        {
+          if (name.startsWith("get") && args.length > 0) {
+            if (args[0] instanceof Integer) {
+              return getByIndex(method, args, (Integer) args[0]);
+            }
+            if (method.getParameterTypes()[0] == String.class) {
+              return getByLabel(method, args, requireLabel((String) args[0]));
+            }
+          }
+          return call(method, current(), args);
+        }
     }
   }
 
@@ -259,28 +280,40 @@ final class ResultSetHandler extends BaseHandler {
     lastReadWasSource = true;
     String value = names.get(current);
     switch (method.getName()) {
-      case "getString", "getNString" -> {
-        return value;
-      }
-      case "getObject" -> {
-        if (args.length == 2 && args[1] instanceof Class<?> type) {
-          if (type.isAssignableFrom(String.class)) {
-            return value;
-          }
-          throw conversion(type.getName());
+      case "getString":
+      case "getNString":
+        {
+          return value;
         }
-        return value;
-      }
-      case "getCharacterStream", "getNCharacterStream" -> {
-        return new StringReader(value);
-      }
-      case "getBytes" -> {
-        return value.getBytes(StandardCharsets.UTF_8);
-      }
-      case "getAsciiStream", "getBinaryStream" -> {
-        return new ByteArrayInputStream(value.getBytes(StandardCharsets.UTF_8));
-      }
-      default -> throw conversion(method.getName());
+      case "getObject":
+        {
+          if (args.length == 2 && args[1] instanceof Class<?>) {
+            Class<?> type = (Class<?>) args[1];
+            if (type.isAssignableFrom(String.class)) {
+              return value;
+            }
+            throw conversion(type.getName());
+          }
+          return value;
+        }
+      case "getCharacterStream":
+      case "getNCharacterStream":
+        {
+          return new StringReader(value);
+        }
+      case "getBytes":
+        {
+          return value.getBytes(StandardCharsets.UTF_8);
+        }
+      case "getAsciiStream":
+      case "getBinaryStream":
+        {
+          return new ByteArrayInputStream(value.getBytes(StandardCharsets.UTF_8));
+        }
+      default:
+        {
+          throw conversion(method.getName());
+        }
     }
   }
 
@@ -302,8 +335,8 @@ final class ResultSetHandler extends BaseHandler {
       } catch (SQLException | RuntimeException e) {
         // One misbehaving cursor must not stop the others from closing.
         SQLException wrapped =
-            e instanceof SQLException sql
-                ? sql
+            e instanceof SQLException
+                ? (SQLException) e
                 : new SQLException("Closing a backend result set failed: " + e, "HY000", e);
         if (failure == null) {
           failure = wrapped;

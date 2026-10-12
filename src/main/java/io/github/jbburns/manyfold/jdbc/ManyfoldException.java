@@ -54,7 +54,23 @@ public class ManyfoldException extends SQLException {
   }
 
   /** Pairs a standard {@code java.sql} exception class with the factory that rebuilds it. */
-  private record Rebuilder(Class<? extends SQLException> type, Factory factory) {}
+  private static final class Rebuilder {
+    private final Class<? extends SQLException> type;
+    private final Factory factory;
+
+    Rebuilder(Class<? extends SQLException> type, Factory factory) {
+      this.type = type;
+      this.factory = factory;
+    }
+
+    Class<? extends SQLException> type() {
+      return type;
+    }
+
+    Factory factory() {
+      return factory;
+    }
+  }
 
   /**
    * The standard subtypes that {@link #backendFailed} preserves, in match order. None of these
@@ -89,7 +105,11 @@ public class ManyfoldException extends SQLException {
    * @param cause the cause, or null
    */
   public ManyfoldException(String message, @Nullable String sqlState, @Nullable Throwable cause) {
-    super(message, sqlState, cause instanceof SQLException e ? e.getErrorCode() : 0, cause);
+    super(
+        message,
+        sqlState,
+        cause instanceof SQLException ? ((SQLException) cause).getErrorCode() : 0,
+        cause);
   }
 
   /**
@@ -138,13 +158,15 @@ public class ManyfoldException extends SQLException {
     if (sentSql != null) {
       message += "; sent: " + Redact.url(sentSql);
     }
-    if (!(cause instanceof SQLException vendor)) {
+    if (!(cause instanceof SQLException)) {
       return new ManyfoldException(message, null, cause);
     }
+    SQLException vendor = (SQLException) cause;
     String state = vendor.getSQLState();
     int code = vendor.getErrorCode();
     SQLException wrapped = null;
-    if (vendor instanceof BatchUpdateException batch) {
+    if (vendor instanceof BatchUpdateException) {
+      BatchUpdateException batch = (BatchUpdateException) vendor;
       wrapped = new BatchUpdateException(message, state, code, batch.getLargeUpdateCounts(), cause);
     } else {
       for (Rebuilder entry : REBUILDERS) {

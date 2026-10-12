@@ -46,7 +46,7 @@ configurations.all {
 }
 
 tasks.withType<JavaCompile>().configureEach {
-    options.release = 17
+    options.release = 11
     options.encoding = "UTF-8"
     options.compilerArgs.addAll(listOf("-Xlint:all", "-Xlint:-processing", "-Werror"))
     options.errorprone {
@@ -116,15 +116,17 @@ val clientBundle = tasks.register<Copy>("clientBundle") {
     }
 }
 
-// The bytecode targets Java 17, so the same test classes are run once more on a JDK 17 launcher.
-val test17 = tasks.register<Test>("test17") {
-    description = "Runs the unit tests on a Java 17 runtime."
-    group = "verification"
-    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(17) }
-    testClassesDirs = sourceSets.test.get().output.classesDirs
-    classpath = sourceSets.test.get().runtimeClasspath
-    useJUnitPlatform()
-    jvmArgs(mockitoAgentArgs)
+// The bytecode targets Java 11, so the same test classes are run again on JDK 11 and 17 launchers.
+val testOnOlderJdks = listOf(11, 17).map { jdk ->
+    tasks.register<Test>("test$jdk") {
+        description = "Runs the unit tests on a Java $jdk runtime."
+        group = "verification"
+        javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(jdk) }
+        testClassesDirs = sourceSets.test.get().output.classesDirs
+        classpath = sourceSets.test.get().runtimeClasspath
+        useJUnitPlatform()
+        jvmArgs(mockitoAgentArgs)
+    }
 }
 
 tasks.jacocoTestReport {
@@ -141,7 +143,7 @@ jacoco {
 
 tasks.check {
     // Javadoc runs with -Werror so a broken reference fails CI rather than the release.
-    dependsOn(test17, tasks.jacocoTestReport, tasks.javadoc)
+    dependsOn(testOnOlderJdks, tasks.jacocoTestReport, tasks.javadoc)
 }
 
 spotless {
