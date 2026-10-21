@@ -9,13 +9,13 @@
 # Screenshots and RESULT.txt land in ./validation/out. The container exits non-zero on FAIL.
 
 # Stage 1: build the driver bundle (manyfold jar + H2 jar) with the repository's Gradle wrapper.
-FROM eclipse-temurin:25-jdk@sha256:8c0a84ea11c8f6ed52600fc19f1040121f2a162998e9f50a5faebbbad9172dcc AS builder
+FROM eclipse-temurin:25-jdk@sha256:2d5d5e9b533342a565907c84f47a2ec298c40cde7b13a3ca85d4950fa456a641 AS builder
 WORKDIR /src
 COPY . .
 RUN ./gradlew clientBundle --no-daemon -q
 
 # Stage 2: SQuirreL SQL, a virtual X server and the tools that drive it.
-FROM eclipse-temurin:25-jre@sha256:fcd7fd7b387f94bb2ac461478a7436ad8e349924c374ea8313919624dceae636
+FROM eclipse-temurin:25-jre@sha256:dbb43d81099eec91e0800226ed2296d03146ee7857165b95112372ad0d67e87f
 ARG SQUIRREL_VERSION=5.1.0
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
